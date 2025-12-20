@@ -18,7 +18,9 @@ import sys
 from urllib.parse import urlparse
 
 import cv2
+import numpy as np
 import yt_dlp
+from PIL import Image, ImageDraw, ImageFont
 
 
 def get_available_devices(number_of_devices=10, max_index=1000, verbose=False):
