@@ -7,6 +7,7 @@ import re
 import sys
 
 import cv2
+import matplotlib.pyplot as plt
 import numpy as np
 import requests
 from PIL import Image, ImageDraw, ImageFont
@@ -90,7 +91,7 @@ def visualize_results(response_text,
     # Combine origin and result side-by-side
     combined_view = np.hstack((boxed_original, annotated_img))
 
-    import matplotlib.pyplot as plt
+    # Visualization
     combined_view = cv2.cvtColor(combined_view, cv2.COLOR_BGR2RGB)
     plt.imshow(combined_view)
     plt.show()

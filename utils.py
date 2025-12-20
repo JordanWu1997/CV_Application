@@ -182,6 +182,28 @@ def resize_image(image,
     return image
 
 
+def resize_image_if_needed(image_path: str, max_size: int = 1024) -> str:
+    """Resize image if needed to a maximum size of max_size. Keep the aspect ratio."""
+    img = Image.open(image_path)
+    width, height = img.size
+
+    if width <= max_size and height <= max_size:
+        return image_path
+
+    ratio = min(max_size / width, max_size / height)
+    new_width = int(width * ratio)
+    new_height = int(height * ratio)
+
+    img_resized = img.resize((new_width, new_height), Image.Resampling.LANCZOS)
+
+    base_name = os.path.splitext(image_path)[0]
+    ext = os.path.splitext(image_path)[1]
+    resized_path = f"{base_name}_resized{ext}"
+
+    img_resized.save(resized_path)
+    return resized_path
+
+
 def put_text_to_canvas(image,
                        text,
                        top_left=(0, 0),
@@ -218,3 +240,13 @@ def put_chinese_text_to_canvas(
     draw.text((top_left), text, fg_color, font=font)
     image = np.array(pil_img)
     return image
+
+
+def save_TF_model_to_local(model, processor, output_dir):
+    """  """
+
+    if not os.path.isdir(output_dir):
+        os.makedirs(output_dir)
+
+    model.save_pretrained(output_dir)
+    processor.save_pretrained(output_dir)
