@@ -1,1 +1,3 @@
-# Camera Application
+# CV Application
+
+- Applications for Computer Vision
