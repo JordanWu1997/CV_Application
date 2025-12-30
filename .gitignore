@@ -8,3 +8,6 @@ fonts/
 weights/
 .ipynb_checkpoints
 models/
+output/
+test/
+whl/
