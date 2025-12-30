@@ -49,7 +49,7 @@ def get_available_devices(number_of_devices=10, max_index=1000, verbose=False):
     return devices
 
 
-def parse_video_device(input_device, YT_URL=False):
+def parse_video_device(input_device=None, YT_URL=False):
     """
     Parses the video device based on the provided input.
 
