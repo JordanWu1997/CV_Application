@@ -37,19 +37,26 @@ def run_visualization_pipeline(canvas,
                                output_frame_width=-1,
                                output_frame_height=-1,
                                face_image_size=112,
+                               do_face_parsing=True,
                                add_history=True,
-                               do_face_parsing=True):
+                               frame_num=None):
+
+    canvas_height, canvas_width, _ = canvas.shape
 
     # Draw history
-    overlay_x, overlay_y, gap = 0, frame_height - face_image_size, 0
-    for i, history in enumerate(history_list):
-        canvas = overlay_image_smart(canvas, history, int(overlay_x),
-                                     int(overlay_y))
-        cv2.putText(canvas, f'{frame_num:d}', (overlay_x + 2, overlay_y + 2),
-                    cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 0), 2)
-        cv2.putText(canvas, f'{frame_num:d}', (overlay_x, overlay_y),
-                    cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2)
-        overlay_x = overlay_x + face_image_size + gap
+    if add_history:
+        overlay_x, overlay_y, gap = 0, frame_height - face_image_size, 0
+        for i, (history, history_frame_num) in enumerate(
+                zip(history_list, history_frame_num_list)):
+            canvas = overlay_image_smart(canvas, history, int(overlay_x),
+                                         int(overlay_y))
+            cv2.putText(canvas, f'{history_frame_num:d}',
+                        (overlay_x + 2, overlay_y + 2),
+                        cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 0), 2)
+            cv2.putText(canvas, f'{history_frame_num:d}',
+                        (overlay_x, overlay_y), cv2.FONT_HERSHEY_SIMPLEX, 1,
+                        (255, 255, 255), 2)
+            overlay_x = overlay_x + face_image_size + gap
 
     # Get face infos
     bboxes = [f.bbox for f in faces]
@@ -76,16 +83,19 @@ def run_visualization_pipeline(canvas,
             value=[255, 255, 255])
         aligned_face_h, aligned_face_w, _ = aligned_face_vis.shape
         overlay_x, overlay_y = x2 + padding, y1
-        if overlay_x + aligned_face_w > frame_width:
+        if overlay_x + aligned_face_w > canvas_width:
             overlay_x = x1 - padding - aligned_face_w
         canvas = overlay_image_smart(canvas, aligned_face_vis, int(overlay_x),
                                      int(overlay_y))
         # Update history
-        if frame_num >= infer_frame_interval and frame_num % infer_frame_interval == 0:
-            if len(history_list) >= \
-                    frame_width // face_image_size + 0:
+        if add_history:
+            if len(history_list) >= canvas_width // face_image_size + 0:
                 history_list.pop(0)
+                if frame_num is not None:
+                    history_frame_num_list.pop(0)
             history_list.append(aligned_face_vis)
+            if frame_num is not None:
+                history_frame_num_list.append(frame_num)
 
     # Gaze
     for i, (face, aligned_face) in \
@@ -119,7 +129,7 @@ def run_visualization_pipeline(canvas,
             overlay_x = x2 + padding
             aligned_face_mask_h, aligned_face_mask_w, _ = aligned_face_mask_vis.shape
             overlay_y = y1 + aligned_face_mask_h + padding
-            if overlay_x + aligned_face_mask_w > frame_width:
+            if overlay_x + aligned_face_mask_w > canvas_width:
                 overlay_x = x1 - padding - aligned_face_mask_w
             canvas = overlay_image_smart(canvas, aligned_face_mask_vis,
                                          int(overlay_x), int(overlay_y))
@@ -224,7 +234,7 @@ if __name__ == '__main__':
         # Main
         progress_bar = tqdm(total=total_frames)
         frame_num = 0
-        history_list = []
+        history_list, history_frame_num_list = [], []
         while cap.isOpened():
 
             # Load frame
@@ -272,7 +282,8 @@ if __name__ == '__main__':
                     canvas,
                     output_frame_width=output_frame_width,
                     output_frame_height=output_frame_height,
-                    do_face_parsing=do_face_parsing)
+                    do_face_parsing=do_face_parsing,
+                    frame_num=frame_num)
             except NameError as error:
                 if debug:
                     print(error)
