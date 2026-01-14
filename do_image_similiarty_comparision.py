@@ -74,6 +74,7 @@ def visualize_similarity(aligned_images_1,
                          embeddings_1,
                          embeddings_2,
                          threshold=0.4,
+                         top_right_only=False,
                          output_image_path='./output.png'):
 
     # Init output
@@ -110,7 +111,7 @@ def visualize_similarity(aligned_images_1,
                 enumerate(zip(embeddings_2, aligned_images_2)):
             j += 1
 
-            if i > j:
+            if i > j and top_right_only:
                 axes[i][j].axis('off')
                 continue
 
@@ -127,7 +128,7 @@ def visualize_similarity(aligned_images_1,
             resized1 = cv2.resize(image1, (int(width / 2), int(height / 2)))
             height, width, _ = image2.shape
             resized2 = cv2.resize(image2, (int(width / 2), int(height / 2)))
-            image = cv2.hconcat([resized1, resized2])
+            image = cv2.hconcat([resized2, resized1])
 
             # Show image
             axes[i][j - 1].imshow(image)
@@ -143,6 +144,7 @@ def visualize_similarity(aligned_images_1,
 def run_similarirty_comparison(recognizer,
                                faces_in_images,
                                original_images,
+                               top_right_only=False,
                                output_image_path='output.png'):
 
     # Embed and align
@@ -162,6 +164,7 @@ def run_similarirty_comparison(recognizer,
                          aligned_images,
                          embeddings,
                          embeddings,
+                         top_right_only=top_right_only,
                          output_image_path=output_image_path)
 
 
@@ -258,6 +261,7 @@ if __name__ == '__main__':
         recognizer,
         faces_in_images,
         original_images_with_face,
+        top_right_only=True,
         output_image_path=
         f'{output_image_dir}/output_similarity_ArcFace_MNET.png')
 
@@ -266,6 +270,7 @@ if __name__ == '__main__':
         recognizer,
         faces_in_images,
         original_images_with_face,
+        top_right_only=True,
         output_image_path=
         f'{output_image_dir}/output_similarity_ArcFace_RESNET.png')
 
@@ -274,13 +279,15 @@ if __name__ == '__main__':
         recognizer,
         faces_in_images,
         original_images_with_face,
+        top_right_only=True,
         output_image_path=
-        f'{output_image_dir}/output_similarit_MobileFace_MNET_V3_LARGE.png')
+        f'{output_image_dir}/output_similarity_MobileFace_MNET_V3_LARGE.png')
 
     recognizer = SphereFace(model_name=SphereFaceWeights.SPHERE20)
     run_similarirty_comparison(
         recognizer,
         faces_in_images,
         original_images_with_face,
+        top_right_only=True,
         output_image_path=
-        f'{output_image_dir}/output_similarit_SphereFace_SPHERE36.png')
+        f'{output_image_dir}/output_similarity_SphereFace_SPHERE36.png')
