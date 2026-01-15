@@ -40,7 +40,8 @@ def run_visualization_pipeline(canvas,
                                face_image_size=112,
                                do_face_parsing=True,
                                add_history=True,
-                               frame_num=None):
+                               frame_num=None,
+                               infer_frame_interval=1):
 
     canvas_height, canvas_width, _ = canvas.shape
 
@@ -90,13 +91,14 @@ def run_visualization_pipeline(canvas,
                                      int(overlay_y))
         # Update history
         if add_history:
-            if len(history_list) >= canvas_width // face_image_size + 0:
-                history_list.pop(0)
+            if frame_num >= infer_frame_interval and frame_num % infer_frame_interval == 0:
+                if len(history_list) >= canvas_width // face_image_size + 0:
+                    history_list.pop(0)
+                    if frame_num is not None:
+                        history_frame_num_list.pop(0)
+                history_list.append(aligned_face_vis)
                 if frame_num is not None:
-                    history_frame_num_list.pop(0)
-            history_list.append(aligned_face_vis)
-            if frame_num is not None:
-                history_frame_num_list.append(frame_num)
+                    history_frame_num_list.append(frame_num)
 
     # Gaze
     for i, (face, aligned_face) in \
@@ -284,7 +286,8 @@ if __name__ == '__main__':
                     output_frame_width=output_frame_width,
                     output_frame_height=output_frame_height,
                     do_face_parsing=do_face_parsing,
-                    frame_num=frame_num)
+                    frame_num=frame_num,
+                    infer_frame_interval=infer_frame_interval)
             except NameError as error:
                 if debug:
                     print(error)
