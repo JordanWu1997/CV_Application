@@ -21,8 +21,8 @@ import time
 import cv2
 from ultralytics import YOLO
 
-from utils import (get_available_devices, parse_video_device,
-                   put_text_to_canvas, resize_image, toggle_bool_option)
+from utils.utils import (get_available_devices, parse_video_device,
+                         put_text_to_canvas, resize_image, toggle_bool_option)
 
 
 def main():

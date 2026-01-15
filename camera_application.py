@@ -54,9 +54,9 @@ import pytesseract
 from PIL import Image, ImageDraw, ImageFont
 from pyzbar import pyzbar
 
-from utils import (cycle_options, get_available_devices, parse_video_device,
-                   put_chinese_text_to_canvas, put_text_to_canvas,
-                   resize_image, toggle_bool_option)
+from utils.utils import (cycle_options, get_available_devices,
+                         parse_video_device, put_chinese_text_to_canvas,
+                         put_text_to_canvas, resize_image, toggle_bool_option)
 
 
 def color_adjust(i: int, c: float, b: int) -> np.uint8:

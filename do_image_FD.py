@@ -32,9 +32,9 @@ from uniface.detection import RetinaFace, YOLOv5Face
 from uniface.parsing import BiSeNet
 from uniface.visualization import draw_detections, draw_gaze, vis_parsing_maps
 
-from face_utils import (align_face, detect_face, estimate_gaze,
-                        overlay_image_smart, parse_face, predict_age_gender,
-                        predict_emotion)
+from utils.face_utils import (align_face, detect_face, estimate_gaze,
+                              overlay_image_smart, parse_face,
+                              predict_age_gender, predict_emotion)
 
 
 def run_visualization_pipeline(canvas,

@@ -13,7 +13,7 @@ import requests
 from PIL import Image, ImageDraw, ImageFont
 from tqdm import tqdm
 
-from utils import put_chinese_text_to_canvas
+from utils.utils import put_chinese_text_to_canvas
 
 
 def get_ocr_grounding(image_path,

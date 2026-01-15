@@ -11,7 +11,7 @@ import torch
 from PIL import Image
 from transformers import AutoImageProcessor, DPTForDepthEstimation
 
-from utils import save_TF_model_to_local
+from utils.utils import save_TF_model_to_local
 
 
 def run_depth_estimate(image, model, proceesor):

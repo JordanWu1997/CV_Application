@@ -19,10 +19,6 @@ import time
 
 import cv2
 from tqdm import tqdm
-
-from face_utils import (align_face_and_embed, detect_face, get_matched_faces,
-                        get_target_faces_and_embeddings,
-                        match_face_by_similarity, overlay_image_smart)
 from uniface import MobileGaze
 from uniface.attribute.age_gender import AgeGender
 from uniface.attribute.emotion import Emotion
@@ -33,6 +29,11 @@ from uniface.detection import RetinaFace
 from uniface.parsing import BiSeNet
 from uniface.recognition import ArcFace
 from uniface.visualization import draw_detections, draw_gaze, vis_parsing_maps
+
+from utils.face_utils import (align_face_and_embed, detect_face,
+                              get_matched_faces,
+                              get_target_faces_and_embeddings,
+                              match_face_by_similarity, overlay_image_smart)
 
 
 def run_visualization_pipeline(canvas, vis_threshold=0.6, face_image_size=112):

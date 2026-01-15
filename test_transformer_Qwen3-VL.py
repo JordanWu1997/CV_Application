@@ -13,8 +13,8 @@ import numpy as np
 from PIL import Image
 from transformers import AutoProcessor, Qwen3VLForConditionalGeneration
 
-from utils import (put_chinese_text_to_canvas, resize_image_if_needed,
-                   save_TF_model_to_local)
+from utils.utils import (put_chinese_text_to_canvas, resize_image_if_needed,
+                         save_TF_model_to_local)
 
 
 def build_messages(system_prompt: str,
