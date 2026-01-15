@@ -8,29 +8,66 @@
 # | |/ /  | | | |  Author: Jordan Kuan-Hsien Wu           \ \      / / | | | #
 # | ' /   | |_| |  E-mail: jordankhwu@gmail.com            \ \ /\ / /| | | | #
 # | . \   |  _  |  Github: https://github.com/JordanWu1997  \ V  V / | |_| | #
-# |_|\_\  |_| |_|  Datetime: 2024-12-22 16:11:23             \_/\_/   \___/  #
+# |_|\_\  |_| |_|  Datetime: 2025-04-02 21:02:33             \_/\_/   \___/  #
 #                                                                            #
 # ========================================================================== #
 """
 
 import argparse
-import os
 import sys
 import time
+from random import randint
 
 import cv2
+import numpy as np
+from ultralytics import SAM, YOLO, FastSAM
 
-from image_OCR import get_OCR_in_chars, get_OCR_in_words, visualize_OCR_result
-from utils import (get_available_devices, parse_video_device,
-                   put_text_to_canvas, resize_image, toggle_bool_option)
+from utils.utils import (parse_video_device, put_text_to_canvas, resize_image,
+                         toggle_bool_option)
+
+
+def do_image_segmentation(image, model, mask_only=False):
+    # Get image geometry: size
+    height, width, _ = image.shape
+    # Segmenation
+    results = model.predict(image)
+    # Init background canvas
+    if mask_only:
+        result_image = np.zeros_like(image, dtype=np.uint8)
+    else:
+        result_image = image.copy()
+    # Early stop
+    if results[0].masks is None:
+        return result_image
+    # Visualization (segmentation)
+    masks = results[0].masks.data.cpu().tolist()
+    # Plot segmenation blocks
+    for i, mask in enumerate(masks):
+        mask = np.array(mask, dtype=bool)
+        canvas = np.zeros_like(mask, dtype=np.uint8)
+        canvas = np.array([canvas] * 3)
+        canvas = np.transpose(canvas, (1, 2, 0))
+        color = (randint(0, 255), randint(0, 255), randint(0, 255))
+        canvas[mask] = color
+        canvas = cv2.resize(canvas, (width, height))
+        result_image = cv2.addWeighted(result_image, 1, canvas, 0.5, 0)
+    return result_image
+
+
+def do_image_classification(image, model, canvas=None):
+    results = model(image)
+    if canvas is not None:
+        results[0].orig_img = canvas
+    result_image = results[0].plot()
+    return result_image
 
 
 def main():
-    """  """
 
     # Input argument
     parser = argparse.ArgumentParser()
-    parser.add_argument('--list-devices',
+    parser.add_argument('-l',
+                        '--list-devices',
                         action='store_true',
                         help='Get available device list')
     parser.add_argument('-i',
@@ -47,39 +84,26 @@ def main():
                         default=1.0,
                         type=float,
                         help='Ratio to resize live display')
-    parser.add_argument('-f',
-                        '--start_frame',
-                        default=0,
-                        type=int,
-                        help='Frame to start')
+    parser.add_argument('-m',
+                        '--mask_only',
+                        help='Show segmenation mask for visualization',
+                        action='store_true')
     parser.add_argument('-s',
                         '--skip_frame',
                         type=int,
                         default=3,
                         help='Number of frame to skip')
-    parser.add_argument('-l',
-                        '--lang',
-                        type=str,
-                        default='chi_tra+eng',
-                        help='Language for OCR')
-    parser.add_argument('-c',
-                        '--OCR_in_char',
-                        action='store_true',
-                        help='OCR in character-level')
-    parser.add_argument('-fs',
-                        '--font_size',
-                        type=int,
-                        default=30,
-                        help='Fontsize of OCR result')
+    parser.add_argument('-o',
+                        '--option',
+                        choices=['seg-cls', 'seg', 'cls'],
+                        default='seg-cls',
+                        help='Option: combination of seg. and cls.')
     args = parser.parse_args()
 
     # List available devices
     if args.list_devices:
         devices = get_available_devices(verbose=True)
         sys.exit(f'[INFO] Found devices: {devices}')
-
-    # Init
-    show_OSD = True
 
     # Get input device
     input_device = parse_video_device(args.input_device, YT_URL=args.YT_URL)
@@ -92,18 +116,17 @@ def main():
     else:
         print(f'[INFO] Start to play {input_device} ...')
 
-    # Get frame property:  FPS
-    input_FPS = cap.get(cv2.CAP_PROP_FPS)
+    # Init
+    show_OSD, mask_only = True, args.mask_only
 
-    # Jump to frame to start
-    if args.start_frame > 0:
-        print(f'[INFO] Jump to frame {args.start_frame} ...')
-        for _ in range(args.start_frame):
-            _, _ = cap.read()
+    # Load segmentation model
+    seg_model = FastSAM('./weights/FastSAM-s.pt')
+
+    # Load
+    cls_model = YOLO('./weights/yolo11n-cls.pt')
 
     # Main
     counter, skip_frame, playspeed = 0, args.skip_frame, 1
-    font_size = args.font_size
     while True:
 
         # Read frame
@@ -132,9 +155,11 @@ def main():
                 print('[ERROR] Cannot get image from source ... Retrying ...')
                 time.sleep(0.05)
             start = time.time()
-
         # Get image geometry: size
         height, width, _ = frame.shape
+
+        # Get frame property:  FPS
+        input_FPS = cap.get(cv2.CAP_PROP_FPS)
 
         # Resize frame
         if round(args.resize_ratio, 3) != 1.0:
@@ -184,55 +209,52 @@ def main():
             else:
                 playspeed -= 0.25
                 playspeed = max(playspeed, 0.25)
-        # Caption font size
-        if key == ord('+'):
-            font_size += 1
-        if key == ord('_'):
-            font_size -= 1
-            if font_size < 1:
-                print('[WARNING] Reached minimal OCR result font size: 1')
-                font_size = 1
+        # Toggle mask_only option
+        if key == ord('m'):
+            mask_only = toggle_bool_option(mask_only)
+            print(f'[INFO] Mask_only option toggled. Mask_only: {mask_only}')
 
         # Perform object detection on an image
         if counter % skip_frame == 0 and counter > skip_frame:
-            # OCR
-            if args.OCR_in_char:
-                result_dict = get_OCR_in_chars(frame, lang=args.lang)
+            if args.option == 'seg-cls':
+                result_image = do_image_segmentation(frame,
+                                                     seg_model,
+                                                     mask_only=mask_only)
+                result_image = do_image_classification(frame,
+                                                       cls_model,
+                                                       canvas=result_image)
+            elif args.option == 'seg':
+                result_image = do_image_segmentation(frame,
+                                                     seg_model,
+                                                     mask_only=mask_only)
+            elif args.option == 'cls':
+                result_image = do_image_classification(frame, cls_model)
             else:
-                result_dict = get_OCR_in_words(frame, lang=args.lang)
-            # Visualization
-            canvas = visualize_OCR_result(frame,
-                                          result_dict,
-                                          output=None,
-                                          show_fig=False,
-                                          font_size=font_size)
-
+                print(
+                    f'[WARNINGK] Invalid option: {args.option}. Ignore it ...')
             # Infer FPS
             infer_FPS = 1 / (time.time() - start)
 
         # Use previous result when object detection is ignored at current frame
-        else:
-            try:
-                canvas = visualize_OCR_result(frame,
-                                              result_dict,
-                                              output=None,
-                                              show_fig=False,
-                                              font_size=font_size)
-            except UnboundLocalError:
-                canvas = frame
+        try:
+            canvas = result_image.copy()
+        except UnboundLocalError:
+            canvas = frame
 
-        # infer_FPS
+        # Infer FPS
         try:
             infer_FPS = infer_FPS
         except UnboundLocalError:
             infer_FPS = -1
 
         # Add OSD
-        OSD_text = f'Input FPS: {input_FPS:.1f}, '
+        OSD_text = f'[{args.option}] '
+        if mask_only:
+            OSD_text += '[M] '
+        OSD_text += f'Input FPS: {input_FPS:.1f}, '
         OSD_text += f'Infer FPS: {infer_FPS:.1f}, '
         OSD_text += f'Playspeed: {playspeed:.2f}, '
-        OSD_text += f'Infer every {skip_frame:d} frame, '
-        OSD_text += f'FS: {font_size:d} '
+        OSD_text += f'Infer every {skip_frame:d} frame'
         if key == 13:  # Enter
             show_OSD = toggle_bool_option(show_OSD)
         if show_OSD:
@@ -244,7 +266,7 @@ def main():
                                thickness=1)
 
         # Display the annotated frame
-        cv2.imshow(f"OCR w/ Tesseract {args.lang}: {input_device}", canvas)
+        cv2.imshow(f"FastSAM-s: {input_device}", canvas)
 
     cap.release()
     cv2.destroyAllWindows()
