@@ -84,8 +84,8 @@ def visualize_similarity(aligned_images_1,
     from uniface import compute_similarity
 
     # New figure
-    fig, axes = plt.subplots(len(aligned_images) + 1,
-                             len(aligned_images) + 1,
+    fig, axes = plt.subplots(len(aligned_images_1) + 1,
+                             len(aligned_images_2) + 1,
                              figsize=(20, 20))
 
     # Origin
@@ -93,14 +93,14 @@ def visualize_similarity(aligned_images_1,
     axes[0][-1].set_title(f'THR: {threshold:.1%}', fontsize=20, color='green')
 
     # Y-axis
-    for i, aligned_image in enumerate(aligned_images):
+    for i, aligned_image in enumerate(aligned_images_1):
         i += 1
         axes[i][0].axis('off')
         axes[i][-1].imshow(aligned_image)
         axes[i][-1].axis('off')
 
     # X-axis
-    for j, aligned_image in enumerate(aligned_images):
+    for j, aligned_image in enumerate(aligned_images_2):
         axes[0][j].imshow(aligned_image)
         axes[0][j].axis('off')
 
