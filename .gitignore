@@ -11,3 +11,6 @@ models/
 output/
 test/
 whl/
+TODO/
+crops/
+deep-person-reid/
