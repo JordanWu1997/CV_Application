@@ -12,7 +12,7 @@ My Simple Camera Function Collections, including
 [Further Application]
 1. QR-Code Decoder
 2. Barcode Decoder
-3. Optical character recognition (OCR) with Tesseract
+3. Optical character recognition (OCR) with Tesseract and RapidOCR (PaddleOCR)
 
 [TODO]
 1. Add perspective transform
@@ -41,6 +41,7 @@ My Simple Camera Function Collections, including
 """
 
 import argparse
+import logging
 import os
 import sys
 import time
@@ -54,11 +55,16 @@ import pyperclip
 import pytesseract
 from PIL import Image, ImageDraw, ImageFont
 from pyzbar import pyzbar
+from rapidocr import (EngineType, LangDet, LangRec, ModelType, OCRVersion,
+                      RapidOCR)
 
 from utils.utils import (cycle_options, get_available_devices,
                          parse_video_device, put_chinese_text_to_canvas,
                          put_text_to_canvas, resize_for_display, resize_image,
                          toggle_bool_option)
+
+logging.disable(logging.DEBUG)
+logging.disable(logging.WARNING)
 
 
 def color_adjust(i: int, c: float, b: int) -> np.uint8:
@@ -384,6 +390,20 @@ def main():
     # OCR
     OCR_on = False
 
+    # OCR Model
+    ocr_model = RapidOCR(
+        params={
+            'Global.return_word_box': True,  #args.OCR_in_char,
+            "Det.engine_type": EngineType.ONNXRUNTIME,
+            "Det.lang_type": LangDet.CH,
+            "Det.model_type": ModelType.MOBILE,
+            "Det.ocr_version": OCRVersion.PPOCRV5,
+            "Rec.engine_type": EngineType.ONNXRUNTIME,
+            "Rec.lang_type": LangRec.CH,
+            "Rec.model_type": ModelType.MOBILE,
+            "Rec.ocr_version": OCRVersion.PPOCRV5,
+        })
+
     # Main
     counter = 0
     while True:
@@ -586,35 +606,22 @@ def main():
             OCR_on = toggle_bool_option(OCR_on)
         if OCR_on:
             OSD_text += f'[OCR {OCR_skip_frame:d}] '
-            # OCR every skip_frame
+            # Perform object detection on an image
             if counter % OCR_skip_frame == 0 and counter > OCR_skip_frame:
-                result = pytesseract.image_to_boxes(canvas,
-                                                    lang='chi_tra',
-                                                    config='--oem 1')
-                chars, boxes = [], []
-                text = ''
-                for i, line in enumerate(result.split('\n')):
-                    cols = line.split(' ')
-                    if len(cols) == 1:
-                        continue
-                    char = cols[0]
-                    text += char
-                    x1, y1 = int(cols[1]), height - int(cols[2])
-                    x2, y2 = int(cols[3]), height - int(cols[4])
-                    chars.append(char)
-                    boxes.append([x1, y1, x2, y2])
-            # Visualize OCR result
-            for char, box in zip(chars, boxes):
-                x1, y1, x2, y2 = box
-                cv2.rectangle(canvas, (x1, y1), (x2, y2), (0, 0, 255), 1)
-                canvas = put_chinese_text_to_canvas(
-                    canvas,
-                    char,
-                    top_left=(x1, y1),
-                    font_path='./fonts/simfang.ttf')
-            if verbose:
-                if len(text) > 1:
-                    print(f'[INFO] OCR Text: {text}')
+                ocr_result = ocr_model(canvas)
+            # Use previous result when object detection is ignored at current frame
+            try:
+                tmp_canvas = ocr_result.vis()
+                if tmp_canvas is None:
+                    blank = np.ones_like(frame) * 255
+                    tmp_canvas = cv2.hconcat([canvas.copy(), blank])
+                else:
+                    tmp_canvas = cv2.cvtColor(ocr_result.vis(),
+                                              cv2.COLOR_RGB2BGR)
+                canvas = tmp_canvas
+            except NameError as error:
+                if verbose:
+                    print(error)
 
         # ====================================================================
         # Module: Calculate FPS (NOTE: FPS = 1 / elapse)
