@@ -162,6 +162,42 @@ def cycle_options(current_option, options):
     return options[next_index]
 
 
+def generate_output_video_writer(input_video_path,
+                                 input_video_cap,
+                                 output_frame_width=-1,
+                                 output_video_dir='',
+                                 output_suffix='',
+                                 output_video='',
+                                 verbose=False):
+
+    FPS = input_video_cap.get(cv2.CAP_PROP_FPS)
+    frame_width = int(input_video_cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+    frame_height = int(input_video_cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+    output_frame_width = frame_width
+    if output_frame_width > 0:
+        output_frame_height = int(output_frame_width *
+                                  (frame_height / frame_width))
+    fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+
+    input_video_name, _ = os.path.splitext(input_video_path)
+    output_video_path = f'{input_video_name}_{output_suffix}.mp4'
+    if output_video_dir != '':
+        # Init output dir
+        if not os.path.isdir(output_video_dir):
+            os.makedirs(output_video_dir)
+        output_video_path = f'{output_video_dir}/{os.path.basename(input_video_name)}_{output_suffix}.mp4'
+    output_video_writer = cv2.VideoWriter(
+        output_video_path, fourcc, FPS,
+        (output_frame_width, output_frame_height))
+    if verbose:
+        print(
+            f'[INFO] INPUT: {input_video_path} ({frame_width}x{frame_height}@{FPS:.2f})'
+        )
+        print(f'[INFO] OUTPUT: {output_video_path}')
+
+    return output_video_writer, (output_frame_width, output_frame_height)
+
+
 def resize_image(image,
                  width=1920,
                  height=1080,
@@ -202,6 +238,26 @@ def resize_image_if_needed(image_path: str, max_size: int = 1024) -> str:
 
     img_resized.save(resized_path)
     return resized_path
+
+
+def resize_for_display(image,
+                       width=1920,
+                       height=1080,
+                       resize_ratio=1.0,
+                       min_resize_ratio=0.1):
+    """ """
+    # Early stop
+    if round(resize_ratio, 3) == 1.0:
+        return image
+    # Set minimal value
+    if resize_ratio < min_resize_ratio:
+        resize_ratio = min_resize_ratio
+    # Resize
+    resized_width = int(width * resize_ratio)
+    resized_height = int(height * resize_ratio)
+    image = cv2.resize(image, (resized_width, resized_height),
+                       interpolation=cv2.INTER_LINEAR)
+    return image
 
 
 def put_text_to_canvas(image,

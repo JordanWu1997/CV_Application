@@ -9,7 +9,7 @@ My Simple Camera Function Collections, including
 3. Zoom-in/-out, Rotation, Translation
 4. Resize for display (for high/low res. camera on low/high res. monitor)
 
-[Application]
+[Further Application]
 1. QR-Code Decoder
 2. Barcode Decoder
 3. Optical character recognition (OCR) with Tesseract
@@ -46,6 +46,7 @@ import sys
 import time
 from datetime import datetime
 from typing import Optional, Tuple
+from urllib.parse import urlparse
 
 import cv2
 import numpy as np
@@ -56,7 +57,8 @@ from pyzbar import pyzbar
 
 from utils.utils import (cycle_options, get_available_devices,
                          parse_video_device, put_chinese_text_to_canvas,
-                         put_text_to_canvas, resize_image, toggle_bool_option)
+                         put_text_to_canvas, resize_for_display, resize_image,
+                         toggle_bool_option)
 
 
 def color_adjust(i: int, c: float, b: int) -> np.uint8:
@@ -161,9 +163,6 @@ def negative(image: np.ndarray) -> np.ndarray:
 
     Parameters:
     image (np.ndarray): The input image as a NumPy array.
-
-    Returns:
-    np.ndarray: The inverted image.
     """
     return 255 - image
 
@@ -190,6 +189,7 @@ def decode_qrcode(image, qrcode_detector, verbose=False):
                       (qrcode_bbox[2], qrcode_bbox[3]), (0, 0, 255), 2)
         # Copy text to clipboard
         if len(data) > 0:
+            # Add text
             put_text_to_canvas(image,
                                data,
                                top_left=(qrcode_bbox[0], qrcode_bbox[1]),
@@ -226,6 +226,7 @@ def decode_barcode(image, barcode_detector, verbose=False):
                       (barcode_bbox[2], barcode_bbox[3]), (0, 255, 255), 2)
         # Copy text to clipboard
         if len(data) > 0:
+            # Add text
             put_text_to_canvas(image,
                                data,
                                top_left=(barcode_bbox[0], barcode_bbox[1]),
@@ -328,8 +329,26 @@ def main():
         devices = get_available_devices(verbose=args.verbose)
         sys.exit(f'[INFO] Found devices: {devices}')
 
-    # Get input device
-    input_device = parse_video_device(args.input_device, YT_URL=args.YT_URL)
+    # Get video device (0 means camera on computer, sometimes maybe 1)
+    input_device = args.input_device
+    if input_device is None:
+        input_device = get_available_devices(number_of_devices=1)[0]
+        print('[INFO] Use first found device as input device')
+
+    # Check if input is an URL
+    result = urlparse(input_device)
+    if result.scheme and result.netloc:
+        print(f'[INFO] Input URL: {input_device}')
+    # Check if input is a file
+    elif os.path.isfile(input_device):
+        print(f'[INFO] Input file: {input_device}')
+    # Check if input is a device
+    else:
+        try:
+            input_device = int(input_device)
+            print(f'[INFO] Input device: {input_device}')
+        except ValueError:
+            sys.exit(f'[ERROR] Cannot parse input {input_device} ...')
 
     # Get video
     cap = cv2.VideoCapture(input_device)
@@ -345,8 +364,9 @@ def main():
     # Init
     alpha, contrast, brightness = 0, 0, 0
     zoom, rotation, center_x_offset, center_y_offset = 1.0, 0, 0, 0
-    zoom_step, rotation_step, offset_step = 0.1, 30, 100
+    zoom_step, rotation_step, offset_step = 0.1, 15, 100
     resize_ratio_step = 0.1
+    OCR_skip_frame, chars, boxes, text = 10, [], [], ''
     # Flag
     zbar_decoder_on = args.zbar_decoder
     barcode_decoder_on = args.qrcode_decoder
@@ -361,6 +381,8 @@ def main():
     noise_suppression_method = noise_suppression_methods[0]
     # Grayscale, Negative
     grayscale_on, negative_on = False, False
+    # OCR
+    OCR_on = False
 
     # Main
     counter = 0
@@ -527,7 +549,7 @@ def main():
         # ====================================================================
         # Module: Decode QR Code
         # ====================================================================
-        if key == ord('c'):
+        if key == ord('d'):
             qrcode_decoder_on = toggle_bool_option(qrcode_decoder_on)
         if qrcode_decoder_on:
             OSD_text += '[CV QR Code Decoder] '
@@ -558,6 +580,43 @@ def main():
                     break
 
         # ====================================================================
+        # Module: OCR with tesseract
+        # ====================================================================
+        if key == ord('o'):
+            OCR_on = toggle_bool_option(OCR_on)
+        if OCR_on:
+            OSD_text += f'[OCR {OCR_skip_frame:d}] '
+            # OCR every skip_frame
+            if counter % OCR_skip_frame == 0 and counter > OCR_skip_frame:
+                result = pytesseract.image_to_boxes(canvas,
+                                                    lang='chi_tra',
+                                                    config='--oem 1')
+                chars, boxes = [], []
+                text = ''
+                for i, line in enumerate(result.split('\n')):
+                    cols = line.split(' ')
+                    if len(cols) == 1:
+                        continue
+                    char = cols[0]
+                    text += char
+                    x1, y1 = int(cols[1]), height - int(cols[2])
+                    x2, y2 = int(cols[3]), height - int(cols[4])
+                    chars.append(char)
+                    boxes.append([x1, y1, x2, y2])
+            # Visualize OCR result
+            for char, box in zip(chars, boxes):
+                x1, y1, x2, y2 = box
+                cv2.rectangle(canvas, (x1, y1), (x2, y2), (0, 0, 255), 1)
+                canvas = put_chinese_text_to_canvas(
+                    canvas,
+                    char,
+                    top_left=(x1, y1),
+                    font_path='./fonts/simfang.ttf')
+            if verbose:
+                if len(text) > 1:
+                    print(f'[INFO] OCR Text: {text}')
+
+        # ====================================================================
         # Module: Calculate FPS (NOTE: FPS = 1 / elapse)
         # ====================================================================
         FPS = 1 / (time.time() - start)
@@ -581,10 +640,10 @@ def main():
         # ====================================================================
         # Module: Resize for display
         # ====================================================================
-        canvas = resize_image(canvas,
-                              width=width,
-                              height=height,
-                              resize_ratio=resize_ratio)
+        canvas = resize_for_display(canvas,
+                                    width=width,
+                                    height=height,
+                                    resize_ratio=resize_ratio)
         # Expand
         if key == ord('+'):
             resize_ratio += resize_ratio_step

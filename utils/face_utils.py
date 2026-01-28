@@ -71,42 +71,6 @@ def get_target_faces_and_embeddings(target_image_paths,
     return target_aligned_faces, target_embeddings
 
 
-def generate_output_video_writer(input_video_path,
-                                 input_video_cap,
-                                 output_frame_width=-1,
-                                 output_video_dir='',
-                                 output_suffix='',
-                                 output_video='',
-                                 verbose=False):
-
-    FPS = input_video_cap.get(cv2.CAP_PROP_FPS)
-    frame_width = int(input_video_cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-    frame_height = int(input_video_cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-    output_frame_width = frame_width
-    if output_frame_width > 0:
-        output_frame_height = int(output_frame_width *
-                                  (frame_height / frame_width))
-    fourcc = cv2.VideoWriter_fourcc(*'mp4v')
-
-    input_video_name, _ = os.path.splitext(input_video_path)
-    output_video_path = f'{input_video_name}_{output_suffix}.mp4'
-    if output_video_dir != '':
-        # Init output dir
-        if not os.path.isdir(output_video_dir):
-            os.makedirs(output_video_dir)
-        output_video_path = f'{output_video_dir}/{os.path.basename(input_video_name)}_{output_suffix}.mp4'
-    output_video_writer = cv2.VideoWriter(
-        output_video_path, fourcc, FPS,
-        (output_frame_width, output_frame_height))
-    if verbose:
-        print(
-            f'[INFO] INPUT: {input_video_path} ({frame_width}x{frame_height}@{FPS:.2f})'
-        )
-        print(f'[INFO] OUTPUT: {output_video_path}')
-
-    return output_video_writer, (output_frame_width, output_frame_height)
-
-
 def detect_face(image, detector, confidence_threshold=0.6):
     faces = detector.detect(image)
     # Filter face by confidence
