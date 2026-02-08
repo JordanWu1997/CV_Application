@@ -23,8 +23,8 @@ from rapidocr import (EngineType, LangDet, LangRec, ModelType, OCRVersion,
                       RapidOCR)
 from tqdm import tqdm
 
-from utils.utils import (get_available_devices, parse_video_device,
-                         put_text_to_canvas, resize_image, toggle_bool_option)
+# from utils.utils import (get_available_devices, parse_video_device,
+# put_text_to_canvas, resize_image, toggle_bool_option)
 
 logging.disable(logging.DEBUG)
 logging.disable(logging.WARNING)
@@ -50,6 +50,7 @@ def main():
                         '--OCR_in_char',
                         action='store_true',
                         help='OCR in character-level')
+    parser.add_argument('-v', '--verbose', action='store_true', help='Verbose')
     args = parser.parse_args()
 
     # Init OCR Model
@@ -76,6 +77,10 @@ def main():
         image = cv2.imread(input_image_path)
         # Run inference
         ocr_result = ocr_model(image)
+        # Print OCR result
+        if args.verbose:
+            print(f'[INFO] Image: {input_image_path}')
+            print(f'[INFO] OCR: {ocr_result.txts}')
         # Visualization
         canvas = ocr_result.vis()
         # Save result
