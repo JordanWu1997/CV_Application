@@ -10,7 +10,7 @@ import torch
 from ultralytics import YOLO
 
 
-def get_vlm_prediction(crop, ollama_url, model_name, prompt):
+def get_vlm_prediction(crop, ollama_url, model_name, prompt, verbose=False):
     """Encodes crop to base64 and queries local Ollama server."""
 
     # 1. Encode image to base64
@@ -30,8 +30,13 @@ def get_vlm_prediction(crop, ollama_url, model_name, prompt):
         response.raise_for_status()
         result = response.json().get("response", "").strip()
 
+        if verbose:
+            print(f'[INFO] Prompt: {prompt}')
+            print(f'[INFO] {model_name}: {result}')
+            print()
+
         # Extract 0 (positive) or 1 (negative) from the response
-        return 0 if "yes" in result else 1
+        return 0 if "yes" in result.lower() else 1
 
     except Exception as e:
         print(f"Error calling Ollama: {e}")
@@ -44,11 +49,11 @@ if __name__ == '__main__':
     input_image_paths = sys.argv[1:]
 
     # Ultralytics YOLO
-    yolo_model = YOLO('./models/yolo11n.pt')
+    yolo_model = YOLO('./weights/yolo11x.pt')
 
     # Ollama VLM as classifier
-    ollama_url = "http://localhost:11433/api/generate"
-    model_name = "qwen3-vl:4b"
+    ollama_url = "http://localhost:11434/api/generate"
+    model_name = "gemma3:4b"
     VLM_prompt = "Is the person in this image female? Answer only yes or no."
     VLM_class_names = {0: "Female", 1: "Not-Female"}
 
@@ -76,7 +81,8 @@ if __name__ == '__main__':
                     VLM_class = get_vlm_prediction(crop,
                                                    ollama_url=ollama_url,
                                                    model_name=model_name,
-                                                   prompt=VLM_prompt)
+                                                   prompt=VLM_prompt,
+                                                   verbose=False)
                     new_data[i, 5] = VLM_class
 
             # Update the Results object
