@@ -128,10 +128,12 @@ class OWLYOLO:
         else:
             det = torch.empty((0, 6))
 
-        return Results(orig_img=img_bgr,
-                       path="inference.jpg",
-                       names=label_map,
-                       boxes=det)
+        return [
+            Results(orig_img=img_bgr,
+                    path="inference.jpg",
+                    names=label_map,
+                    boxes=det)
+        ]
 
     def save_local(self, path):
         self.model.save_pretrained(path)
@@ -155,15 +157,15 @@ if __name__ == "__main__":
         results = detector(image, strict_roi=True)
 
         # See the raw filtered tensors
-        boxes = results.boxes.xyxy.cpu().tolist()
-        cls_ids = results.boxes.cls.int().cpu().tolist()
-        confs = results.boxes.conf.cpu().tolist()
+        boxes = results[0].boxes.xyxy.cpu().tolist()
+        cls_ids = results[0].boxes.cls.int().cpu().tolist()
+        confs = results[0].boxes.conf.cpu().tolist()
         for box, cls_id, conf in zip(boxes, cls_ids, confs):
             x1, y1, x2, y2 = map(int, box)
             print(f'- {queries[cls_id]} {conf:.2f} {x1} {y1} {x2} {y2} ')
 
         # Use standard Ultralytics methods
-        canvas = results.plot()
+        canvas = results[0].plot()
         canvas = cv2.cvtColor(canvas, cv2.COLOR_BGR2RGB)
         plt.imshow(canvas)
         plt.show()
