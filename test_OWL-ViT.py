@@ -22,7 +22,18 @@ import matplotlib.pyplot as plt
 import numpy as np
 import torch
 from PIL import Image
-from transformers import OwlViTForObjectDetection, OwlViTProcessor
+from transformers import (Owlv2ForObjectDetection, Owlv2Processor,
+                          OwlViTForObjectDetection, OwlViTProcessor)
+
+
+def save_TF_model_to_local(model, processor, output_dir):
+    """  """
+
+    if not os.path.isdir(output_dir):
+        os.makedirs(output_dir)
+
+    model.save_pretrained(output_dir)
+    processor.save_pretrained(output_dir)
 
 
 def do_image_OWL(image_path, processor, model, query_config, device='cpu'):
@@ -137,10 +148,18 @@ def visualize_OWL_result(image_path, OWL_results, query_color_map):
 if __name__ == '__main__':
 
     # 1. Setup paths and parameters
+
     model_name = "google/owlvit-base-patch32"
+    OWL_model = OwlViTForObjectDetection
+    OWL_processor = OwlViTProcessor
+
+    #model_name = "google/owlv2-large-patch14-ensemble"
+    #OWL_model = Owlv2ForObjectDetection
+    #OWL_processor = Owlv2Processor
+
+    # Local setup
     device = "cuda" if torch.cuda.is_available() else "cpu"
     local_dir = "./models/"  # Your specific directory
-    os.makedirs(local_dir, exist_ok=True)
 
     # Define your query logic: { "word": (confidence_threshold, min_area_threshold) }
     # Area is calculated as (x2 - x1) * (y2 - y1) in pixel coordinates
@@ -148,15 +167,21 @@ if __name__ == '__main__':
         "cat": (0.1, -1),
         "dog": (0.1, -1),
         "giraffe": (0.1, -1),
+        "bike": (0.1, -1),
     }
     query_color_map = generate_query_color_map(query_config)
 
-    # 2. Download/Load Model to specific directory
-    # cache_dir ensures it downloads there if not present
-    processor = OwlViTProcessor.from_pretrained(model_name,
-                                                cache_dir=local_dir)
-    model = OwlViTForObjectDetection.from_pretrained(
-        model_name, cache_dir=local_dir).to(device)
+    # 2. Download/Load Model to a specific directory
+    local_model_dir = f'{local_dir}/{model_name}'
+    if not os.path.isdir(local_model_dir):
+        processor = OWL_processor.from_pretrained(model_name)
+        model = OWL_model.from_pretrained(model_name).to(device)
+        save_TF_model_to_local(model,
+                               processor,
+                               output_dir=f'{local_model_dir}')
+    else:
+        processor = OWL_processor.from_pretrained(local_model_dir)
+        model = OWL_model.from_pretrained(local_model_dir).to(device)
 
     # 3. Inference and visualization
     input_image_paths = sys.argv[1:]
