@@ -208,10 +208,6 @@ if __name__ == '__main__':
                         help='Similarity threshold')
     args = parser.parse_args()
 
-    print(args.target)
-    import sys
-    sys.exit()
-
     # Parse input arguments
     input_video_paths = args.input
     target_image_paths_group = args.target_group
@@ -242,7 +238,7 @@ if __name__ == '__main__':
     recognizer = ArcFace(model_name=ArcFaceWeights.RESNET)
 
     # Target images
-    target_aligned_faces_group, target_embeddings_groups = []
+    target_aligned_faces_group, target_embeddings_groups = [], []
     for target_image_paths in target_image_paths_group:
         target_aligned_faces, target_embeddings = \
             get_target_faces_and_embeddings(target_image_paths, detector, recognizer)
