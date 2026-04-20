@@ -1,3 +1,4 @@
+# Directory
 __pycache__
 build/
 dist/
@@ -7,6 +8,7 @@ data/
 fonts/
 weights/
 .ipynb_checkpoints
+README
 models/
 output/
 test/
@@ -14,3 +16,6 @@ whl/
 TODO/
 crops/
 deep-person-reid/
+
+# File
+mobileclip_blt.ts
