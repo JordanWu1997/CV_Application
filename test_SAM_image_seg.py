@@ -17,9 +17,9 @@ if __name__ == '__main__':
 
     # Load models
     start = time.time()
-    # model = SAM('./weights/sam2_t.pt')
-    # model = SAM('./weights/mobile_sam.pt')
-    model = FastSAM('./weights/FastSAM-s.pt')
+    # model = SAM('./models/ultralytics/sam2_t.pt')
+    # model = SAM('./models/ultralytics/mobile_sam.pt')
+    model = FastSAM('./models/ultralytics/FastSAM-s.pt')
     model.info()
     print(f'[INFO] Loading model took {time.time()-start:.3f} sec')
 

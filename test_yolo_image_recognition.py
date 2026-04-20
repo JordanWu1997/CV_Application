@@ -28,11 +28,11 @@ def main():
     # Model Dict
     model_dict = {
         0: None,
-        1: './weights/yolo11n.pt',
-        2: './weights/yolov8s-worldv2.pt',
-        3: './weights/yolo11n-cls.pt',
-        4: './weights/yolo11n-seg.pt',
-        5: './weights/yolo11n-pose.pt',
+        1: './models/ultralytics/yolo11n.pt',
+        2: './models/ultralytics/yolov8s-worldv2.pt',
+        3: './models/ultralytics/yolo11n-cls.pt',
+        4: './models/ultralytics/yolo11n-seg.pt',
+        5: './models/ultralytics/yolo11n-pose.pt',
     }
 
     # Input argument

@@ -184,7 +184,7 @@ class GlobalReIDTracker:
 if __name__ == '__main__':
 
     # Load YOLO model
-    yolo_model = YOLO('./weights/yolo11n.pt')
+    yolo_model = YOLO('./models/ultralytics//yolo11n.pt')
 
     # Load torchreid model
     model_name = 'osnet_ain_x1_0'

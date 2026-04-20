@@ -30,11 +30,12 @@ def main():
 
     # Model Dict
     model_dict = {
-        0: './weights/yolo11n.pt',
-        1: './weights/yolov8s-worldv2.pt',
-        2: './weights/yolo11n-seg.pt',
-        3: './weights/yolo11n-pose.pt',
-        4: './weights/yolo11n-obb.pt',
+        0: './models/ultralytics/yolo11n.pt',
+        1: './models/ultralytics/yolov8s-worldv2.pt',
+        2: './models/ultralytics/yolo11n-seg.pt',
+        3: './models/ultralytics/yolo11n-pose.pt',
+        4: './models/ultralytics/yolo11n-obb.pt',
+        5: './models/ultralytics/yoloe-11s-seg-pf.pt'
     }
 
     # Input argument
@@ -64,7 +65,7 @@ def main():
                         help='Frame to start')
     parser.add_argument('-m',
                         '--mode',
-                        choices=[i for i in range(5)],
+                        choices=[i for i in range(len(model_dict.keys()))],
                         default=0,
                         type=int,
                         help=f'{model_dict}')

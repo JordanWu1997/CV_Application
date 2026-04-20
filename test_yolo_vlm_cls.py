@@ -49,7 +49,7 @@ if __name__ == '__main__':
     input_image_paths = sys.argv[1:]
 
     # Ultralytics YOLO
-    yolo_model = YOLO('./weights/yolo11x.pt')
+    yolo_model = YOLO('./models/ultralytics//yolo11x.pt')
 
     # Ollama VLM as classifier
     ollama_url = "http://localhost:11434/api/generate"

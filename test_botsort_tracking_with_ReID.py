@@ -24,7 +24,7 @@ from ultralytics import YOLO
 if __name__ == '__main__':
 
     # Load the model
-    model = YOLO("./weights/yolo11n.pt")
+    model = YOLO("./models/ultralytics/yolo11n.pt")
 
     input_video_paths = sys.argv[1:]
     for input_video_path in input_video_paths:

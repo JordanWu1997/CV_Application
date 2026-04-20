@@ -225,8 +225,8 @@ if __name__ == '__main__':
     debug = False
 
     # Init pose esimator
-    model_weight = './weights/yolo11x-pose.pt'
-    pose_model = YOLO(model_weight)
+    model_path = './models/ultralytics/yolo11x-pose.pt'
+    pose_model = YOLO(model_path)
 
     # Init model: detector
     detector = RetinaFace(model_name=RetinaFaceWeights.RESNET34,

@@ -7,7 +7,7 @@ import uniface
 from uniface.model_store import verify_model_weights
 
 if __name__ == '__main__':
-    model_dir = './models'
+    model_dir = './models/uniface'
     if not os.path.isdir(model_dir):
         os.makedirs(model_dir)
 

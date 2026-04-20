@@ -357,8 +357,8 @@ if __name__ == '__main__':
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
 
     # Load the YOLO model
-    # yolo_model = YOLO('./weights/yolo11n.pt')
-    yolo_model = YOLO('./weights/yolo11n-seg.pt')
+    # yolo_model = YOLO('./models/ultralytics/yolo11n.pt')
+    yolo_model = YOLO('./models/ultralytics/yolo11n-seg.pt')
 
     # Load Torchreid Model
     model_name = 'osnet_ain_x1_0'

@@ -74,7 +74,7 @@ def main():
         sys.exit(f'[INFO] Found devices: {devices}')
 
     # COCO object detector as human detector
-    human_detector = YOLO('./weights/yolo11x.pt')
+    human_detector = YOLO('./models/ultralytics/yolo11x.pt')
 
     # 1. Initialize MediaPipe Holistic and Drawing Utilities
     mp_holistic = mp.solutions.holistic

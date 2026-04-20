@@ -120,10 +120,10 @@ def main():
     show_OSD, mask_only = True, args.mask_only
 
     # Load segmentation model
-    seg_model = FastSAM('./weights/FastSAM-s.pt')
+    seg_model = FastSAM('./models/ultralytics/FastSAM-s.pt')
 
     # Load
-    cls_model = YOLO('./weights/yolo11n-cls.pt')
+    cls_model = YOLO('./models/ultralytics/yolo11n-cls.pt')
 
     # Main
     counter, skip_frame, playspeed = 0, args.skip_frame, 1
