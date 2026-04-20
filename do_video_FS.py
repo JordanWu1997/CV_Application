@@ -31,8 +31,9 @@ from uniface.parsing import BiSeNet
 from uniface.recognition import ArcFace
 from uniface.visualization import draw_detections, draw_gaze, vis_parsing_maps
 
+from utils.utils import generate_output_video_writer
 from utils.face_utils import (align_face_and_embed, detect_face,
-                              generate_output_video_writer, get_matched_faces,
+                              get_matched_faces,
                               get_target_faces_and_embeddings,
                               match_face_by_similarity, overlay_image_smart)
 
