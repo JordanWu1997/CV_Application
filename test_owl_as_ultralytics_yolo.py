@@ -1,7 +1,5 @@
 #!/usr/bin/env python3
 
-import sys
-
 import cv2
 import matplotlib.pyplot as plt
 import numpy as np
@@ -21,7 +19,7 @@ class OWLYOLO:
                  min_area=0,
                  max_area=float('inf'),
                  rois=None,
-                 strict_roi=False,
+                 intersect_area_thr=False,
                  device=None):
         """
         Initialize with persistent defaults.
@@ -42,19 +40,26 @@ class OWLYOLO:
         self.min_area = min_area
         self.max_area = max_area
         self.rois = rois
-        self.strict_roi = strict_roi
+        self.intersect_area_thr = intersect_area_thr
 
-    def _check_roi(self, box, rois, strict):
+    def _check_roi(self, box, rois, intersect_area_thr=0.0):
+        """
+        intersect_area_thr
+        - 0.0:
+        - 1.0:
+        """
         if not rois: return True
         bx1, by1, bx2, by2 = box
         for roi in rois:
             rx1, ry1, rx2, ry2 = roi
-            if strict:
-                if bx1 >= rx1 and by1 >= ry1 and bx2 <= rx2 and by2 <= ry2:
-                    return True
-            else:
-                if max(bx1, rx1) < min(bx2, rx2) and max(by1, ry1) < min(
-                        by2, ry2):
+            x_left = max(bx1, rx1)
+            y_top = max(by1, ry1)
+            x_right = min(bx2, rx2)
+            y_bottom = min(bx2, ry2)
+            if x_right > x_left and y_bottom > y_top:
+                intersection = (x_right - x_left) * (y_bottom - y_top)
+                box_area = (bx2 - bx1) * (by2 - by1)
+                if intersection / box_area > intersect_area_thr:
                     return True
         return False
 
@@ -63,12 +68,12 @@ class OWLYOLO:
                        min_area=None,
                        max_area=None,
                        rois=None,
-                       strict_roi=None):
+                       intersect_area_thr=None):
 
         mi_a = min_area if min_area is not None else self.min_area
         ma_a = max_area if max_area is not None else self.max_area
         r = rois if rois is not None else self.rois
-        s_r = strict_roi if strict_roi is not None else self.strict_roi
+        s_r = intersect_area_thr if intersect_area_thr is not None else self.intersect_area_thr
 
         final_boxes, final_scores, final_labels = [], [], []
         for i, (box, score) in enumerate(
@@ -119,7 +124,7 @@ class OWLYOLO:
                  min_area=None,
                  max_area=None,
                  rois=None,
-                 strict_roi=None):
+                 intersect_area_thr=None):
 
         # 1. Resolve Parameters: Use call-time args if provided, else use init defaults
         q = query_texts if query_texts is not None else self.query_texts
@@ -169,8 +174,9 @@ class OWLYOLO:
                 target_sizes=target_sizes.repeat(len(q_img), 1),
                 nms_threshold=0.0,
                 threshold=c)[0]
-            if results_raw['labels'] is None:
-                label_map = {0: 'target'}
+            label_map = {0: 'target'}
+            if results_raw['labels'] is not None:
+                label_map = results_raw['labels']
 
         # 4. Filter result
         final_boxes, final_scores, final_labels = \
@@ -178,7 +184,7 @@ class OWLYOLO:
                         min_area=min_area,
                         max_area=max_area,
                         rois=rois,
-                        strict_roi=strict_roi)
+                        intersect_area_thr=intersect_area_thr)
 
         # 5. Convert result to Ultralytics result
         return self._convert_to_ultralytics_result(image_pil, final_boxes,
@@ -284,7 +290,7 @@ if __name__ == "__main__":
     for input_image_path in input_image_paths:
         print(f'Input: {input_image_path}')
         image = cv2.imread(input_image_path)
-        results = detector(image, strict_roi=True)
+        results = detector(image, intersect_area_thr=True)
         canvas = visualize_ultralytics_result(results)
         plt.imshow(canvas)
         plt.show()
