@@ -1,320 +1,157 @@
 #!/usr/bin/env python3
-# -*- coding:utf-8 -*-
-# vim: set fileencoding=utf-8
-r"""
-[ADD MODULE DOCUMENTATION HERE]
+"""Video face detection and attributes with optional tracking and separate rendering."""
 
-# ========================================================================== #
-#  _  __   _   _                                          __        ___   _  #
-# | |/ /  | | | |  Author: Jordan Kuan-Hsien Wu           \ \      / / | | | #
-# | ' /   | |_| |  E-mail: jordankhwu@gmail.com            \ \ /\ / /| | | | #
-# | . \   |  _  |  Github: https://github.com/JordanWu1997  \ V  V / | |_| | #
-# |_|\_\  |_| |_|  Datetime: 2025-11-30 20:20:17             \_/\_/   \___/  #
-#                                                                            #
-# ========================================================================== #
-"""
-
+import argparse
+import os
 import time
 
 import cv2
+import numpy as np
 from tqdm import tqdm
 from uniface import MobileGaze
 from uniface.attribute.age_gender import AgeGender
 from uniface.attribute.emotion import Emotion
 from uniface.constants import (DDAMFNWeights, GazeWeights, ParsingWeights,
-                               RetinaFaceWeights, YOLOv5FaceWeights)
-from uniface.detection import RetinaFace, YOLOv5Face
+                               RetinaFaceWeights)
+from uniface.detection import RetinaFace
 from uniface.parsing import BiSeNet
-from uniface.visualization import draw_detections, draw_gaze, vis_parsing_maps
 
-from utils.utils import generate_output_video_writer
+from utils.face_pipeline import (FaceFrame, FaceRecord, FaceTracker,
+                                 output_layout, render_face_frame)
 from utils.face_utils import (align_face, detect_face, estimate_gaze,
-                              overlay_image_smart, parse_face,
-                              predict_age_gender, predict_emotion)
+                              parse_face, predict_age_gender, predict_emotion)
 
 
-def run_visualization_pipeline(canvas,
-                               vis_threshold=0.6,
-                               output_frame_width=-1,
-                               output_frame_height=-1,
-                               face_image_size=112,
-                               do_face_parsing=True,
-                               add_history=True,
-                               frame_num=None,
-                               infer_frame_interval=1):
+class FaceDetectionPipeline:
+    """Reusable FD processor. process_frame returns data independent of rendering."""
 
-    canvas_height, canvas_width, _ = canvas.shape
+    def __init__(self, detector, age_gender, emotion_predictor, gaze_estimator,
+                 parser=None, confidence_threshold=0.6, infer_interval=5,
+                 tracking=False):
+        self.detector = detector
+        self.age_gender = age_gender
+        self.emotion_predictor = emotion_predictor
+        self.gaze_estimator = gaze_estimator
+        self.parser = parser
+        self.confidence_threshold = confidence_threshold
+        self.infer_interval = max(1, infer_interval)
+        self.tracker = FaceTracker() if tracking else None
+        self.last = FaceFrame(-1)
 
-    # Draw history
-    if add_history:
-        overlay_x, overlay_y, gap = 0, frame_height - face_image_size, 0
-        for i, (history, history_frame_num) in enumerate(
-                zip(history_list, history_frame_num_list)):
-            canvas = overlay_image_smart(canvas, history, int(overlay_x),
-                                         int(overlay_y))
-            cv2.putText(canvas, f'{history_frame_num:d}',
-                        (overlay_x + 2, overlay_y + 2),
-                        cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 0), 2)
-            cv2.putText(canvas, f'{history_frame_num:d}',
-                        (overlay_x, overlay_y), cv2.FONT_HERSHEY_SIMPLEX, 1,
-                        (255, 255, 255), 2)
-            overlay_x = overlay_x + face_image_size + gap
+    def process_frame(self, frame, frame_index):
+        inferred = frame_index % self.infer_interval == 0 or self.last.frame_index < 0
+        if inferred:
+            start = time.perf_counter()
+            faces = detect_face(frame, self.detector,
+                                confidence_threshold=self.confidence_threshold)
+            ages, genders = predict_age_gender(frame, self.age_gender, faces)
+            emotions = predict_emotion(frame, self.emotion_predictor, faces)
+            pitches, yaws = estimate_gaze(frame, self.gaze_estimator, faces)
+            aligned = align_face(frame, faces)
+            masks = parse_face(frame, self.parser, aligned)[1] if self.parser else [None] * len(faces)
+            records = []
+            for index, face in enumerate(faces):
+                records.append(FaceRecord(
+                    bbox=tuple(face.bbox), landmarks=np.asarray(face.landmarks),
+                    confidence=float(face.confidence), crop=aligned[index],
+                    mask=masks[index], attributes={
+                        'age': ages[index], 'gender': genders[index],
+                        'emotion': emotions[index], 'pitch': pitches[index],
+                        'yaw': yaws[index],
+                    }))
+            if self.tracker:
+                records = self.tracker.update(frame, records)
+            result = FaceFrame(frame_index, records, True,
+                               time.perf_counter() - start, self.tracker is not None)
+        else:
+            records = self.tracker.update(frame) if self.tracker else self.last.faces
+            result = FaceFrame(frame_index, records, False,
+                               self.last.inference_seconds, self.tracker is not None)
+        self.last = result
+        return result
 
-    # Get face infos
-    bboxes = [f.bbox for f in faces]
-    scores = [f.confidence for f in faces]
-    landmarks = [f.landmarks for f in faces]
 
-    # Draw detections
-    draw_detections(image=canvas,
-                    bboxes=bboxes,
-                    scores=scores,
-                    landmarks=landmarks,
-                    vis_threshold=vis_threshold)
-    # Draw alignments
-    padding = 10
-    for i, (face, aligned_face) in \
-            enumerate(zip(faces, aligned_faces)):
-        bbox = [int(ele) for ele in face.bbox]
-        x1, y1, x2, y2 = bbox
-        # Aligned Faces
-        aligned_face_vis = cv2.copyMakeBorder(
-            aligned_face,
-            3, 3, 3, 3, \
-            cv2.BORDER_CONSTANT,
-            value=[255, 255, 255])
-        aligned_face_h, aligned_face_w, _ = aligned_face_vis.shape
-        overlay_x, overlay_y = x2 + padding, y1
-        if overlay_x + aligned_face_w > canvas_width:
-            overlay_x = x1 - padding - aligned_face_w
-        canvas = overlay_image_smart(canvas, aligned_face_vis, int(overlay_x),
-                                     int(overlay_y))
-        # Update history
-        if add_history:
-            if frame_num >= infer_frame_interval and frame_num % infer_frame_interval == 0:
-                if len(history_list) >= canvas_width // face_image_size + 0:
-                    history_list.pop(0)
-                    if frame_num is not None:
-                        history_frame_num_list.pop(0)
-                history_list.append(aligned_face_vis)
-                if frame_num is not None:
-                    history_frame_num_list.append(frame_num)
+def _parse_args():
+    parser = argparse.ArgumentParser(description='Detect faces and attributes in videos.')
+    parser.add_argument('-i', '--input', nargs='+', required=True, help='Input video paths')
+    parser.add_argument('-o', '--output_dir', default='./output', help='Output video directory')
+    parser.add_argument('-I', '--infer_frame_interval', type=int, default=5,
+                        help='Run detection every N frames')
+    parser.add_argument('--confidence-threshold', type=float, default=0.6)
+    parser.add_argument('--detector-input-size', type=int, default=640)
+    parser.add_argument('-p', '--parse_face', action='store_true',
+                        help='Add face parsing images to the detail panel')
+    parser.add_argument('--track-faces', action='store_true',
+                        help='Assign face IDs and propagate boxes between detections')
+    parser.add_argument('--no-display', action='store_true', help='Disable live preview')
+    parser.add_argument('--display-width', type=int, default=0,
+                        help='Live preview width; 0 keeps full resolution')
+    return parser.parse_args()
 
-    # Gaze
-    for i, (face, aligned_face) in \
-            enumerate(zip(faces, aligned_faces)):
-        if pitchs[i] is not None and yaws[i] is not None:
-            draw_gaze(canvas, face.bbox, pitchs[i], yaws[i])
 
-    # Gender, Age, Emotions
-    for i, (face, aligned_face) in \
-            enumerate(zip(faces, aligned_faces)):
-        bbox = [int(ele) for ele in face.bbox]
-        x1, y1, x2, y2 = bbox
-        cv2.putText(canvas, f'{gender_strs[i]} {ages[i]} {emotions[i]}',
-                    (x1 + 5 + 2, y2 + 20 + 2), cv2.FONT_HERSHEY_SIMPLEX, 0.75,
-                    (0, 0, 0), 2)
-        cv2.putText(canvas, f'{gender_strs[i]} {ages[i]} {emotions[i]}',
-                    (x1 + 5, y2 + 20), cv2.FONT_HERSHEY_SIMPLEX, 0.75,
-                    (255, 255, 255), 2)
+def main():
+    args = _parse_args()
+    interval = max(1, args.infer_frame_interval)
+    threshold = min(max(args.confidence_threshold, 0.0), 1.0)
+    detector = RetinaFace(model_name=RetinaFaceWeights.RESNET34,
+                          conf_thresh=0.5, nms_thresh=0.4,
+                          input_size=(args.detector_input_size, args.detector_input_size))
+    age_gender = AgeGender()
+    emotion = Emotion(model_weights=DDAMFNWeights.AFFECNET8, input_size=(112, 112))
+    gaze = MobileGaze(model_name=GazeWeights.RESNET18)
+    face_parser = (BiSeNet(model_name=ParsingWeights.RESNET34, input_size=(112, 112))
+                   if args.parse_face else None)
 
-    # Face Masks
-    for i, (face, aligned_face) in \
-            enumerate(zip(faces, aligned_faces)):
-        bbox = [int(ele) for ele in face.bbox]
-        x1, y1, x2, y2 = bbox
-        if do_face_parsing:
-            aligned_face_mask_vis = cv2.copyMakeBorder(
-                aligned_face_masks_vis[i],
-                3, 3, 3, 3, \
-                cv2.BORDER_CONSTANT,
-                value=[255, 255, 255])
-            overlay_x = x2 + padding
-            aligned_face_mask_h, aligned_face_mask_w, _ = aligned_face_mask_vis.shape
-            overlay_y = y1 + aligned_face_mask_h + padding
-            if overlay_x + aligned_face_mask_w > canvas_width:
-                overlay_x = x1 - padding - aligned_face_mask_w
-            canvas = overlay_image_smart(canvas, aligned_face_mask_vis,
-                                         int(overlay_x), int(overlay_y))
-
-    # Add OSD
-    OSD_text = f'[INFO] Detected Faces: {len(bboxes):d} '
-    OSD_text += f'FPS: {1/FD_elapse:.1f} '
-    OSD_text += f'Infer every: {infer_frame_interval:d} frame '
-
-    # Add OSD
-    cv2.putText(canvas, OSD_text, (5, 30), \
-                cv2.FONT_HERSHEY_SIMPLEX, 0.75, (0, 255, 0), 2)
-
-    # Resize
-    if output_frame_width > 0 and output_frame_height > 0:
-        canvas = cv2.resize(canvas, (output_frame_width, output_frame_height))
-
-    return canvas
+    for input_path in args.input:
+        cap = cv2.VideoCapture(input_path)
+        if not cap.isOpened():
+            print(f'[WARN] Could not open video: {input_path}')
+            continue
+        total = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+        width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+        height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+        fps = cap.get(cv2.CAP_PROP_FPS) or 25.0
+        layout = output_layout((height, width, 3))
+        os.makedirs(args.output_dir, exist_ok=True)
+        output_path = os.path.join(args.output_dir,
+                                   os.path.splitext(os.path.basename(input_path))[0] + '_output_FD.mp4')
+        writer = cv2.VideoWriter(output_path, cv2.VideoWriter_fourcc(*'mp4v'),
+                                 fps, layout[:2])
+        if not writer.isOpened():
+            cap.release()
+            raise RuntimeError(f'Could not create output video: {output_path}')
+        print(f'[INFO] OUTPUT: {output_path} ({layout[0]}x{layout[1]}@{fps:.2f})')
+        pipeline = FaceDetectionPipeline(detector, age_gender, emotion, gaze,
+                                         face_parser, threshold, interval,
+                                         args.track_faces)
+        progress = tqdm(total=total)
+        frame_index = 0
+        try:
+            while True:
+                ok, frame = cap.read()
+                if not ok:
+                    break
+                result = pipeline.process_frame(frame, frame_index)
+                canvas = render_face_frame(frame, result, 'FD', layout,
+                                           infer_interval=interval)
+                writer.write(canvas)
+                if not args.no_display:
+                    preview = canvas
+                    if args.display_width > 0 and canvas.shape[1] > args.display_width:
+                        preview_height = int(args.display_width * canvas.shape[0] / canvas.shape[1])
+                        preview = cv2.resize(canvas, (args.display_width, preview_height))
+                    cv2.imshow(os.path.basename(input_path), preview)
+                    if cv2.waitKey(1) & 0xFF == 27:
+                        break
+                frame_index += 1
+                progress.update(1)
+        finally:
+            progress.close()
+            cap.release()
+            writer.release()
+            if not args.no_display:
+                cv2.destroyAllWindows()
 
 
 if __name__ == '__main__':
-
-    import argparse
-
-    # Input arguments
-    parser = argparse.ArgumentParser(description="Process frames.")
-    parser.add_argument('-i',
-                        '--input',
-                        nargs='+',
-                        required=True,
-                        help='Input video paths')
-    parser.add_argument('-o',
-                        '--output_dir',
-                        default='./output',
-                        help='Output video directory')
-    parser.add_argument('-I',
-                        '--infer_frame_interval',
-                        default=5,
-                        type=int,
-                        help='Infer every infer_frame_interval frames')
-    parser.add_argument('-p',
-                        '--parse_face',
-                        action='store_true',
-                        help='Face component segmenation')
-    args = parser.parse_args()
-
-    # Input arguments
-    input_video_paths = args.input
-    output_video_dir = args.output_dir
-    do_face_parsing = args.parse_face
-    infer_frame_interval = max(args.infer_frame_interval, 1)
-    output_suffix = 'output_FD'
-    output_frame_width = -1
-    live_display_frame_width = 720
-    live_display = True
-    debug = False
-
-    # Init detector
-    detector = RetinaFace(model_name=RetinaFaceWeights.RESNET34,
-                          conf_thresh=0.5,
-                          nms_thresh=0.4,
-                          input_size=(640, 640))
-    # # Init detector
-    # detector = YOLOv5Face(model_name=YOLOv5FaceWeights.YOLOV5S,
-    # conf_thresh=0.6,
-    # nms_thresh=0.5)
-
-    # Init Age/Gender detector
-    age_gender = AgeGender()
-
-    # Init emotion predictor (requires torch)
-    emotion_predictor = Emotion(model_weights=DDAMFNWeights.AFFECNET8,
-                                input_size=(112, 112))
-
-    # Init gaze esimator
-    gaze_estimator = MobileGaze(model_name=GazeWeights.RESNET18)
-
-    # Init face parsing
-    parser = BiSeNet(model_name=ParsingWeights.RESNET34, input_size=(112, 112))
-
-    # Init face anti-spoofing
-
-    # Main
-    for input_video_path in input_video_paths:
-        cap = cv2.VideoCapture(input_video_path)
-
-        # Get video info
-        total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-        frame_width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-        frame_height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-        FPS = cap.get(cv2.CAP_PROP_FPS)
-        fourcc = cv2.VideoWriter_fourcc(*'mp4v')
-
-        # Generate output video writer
-        output_video_writer, (output_frame_width, output_frame_height) = \
-            generate_output_video_writer(input_video_path, cap,
-                                         output_video_dir=output_video_dir,
-                                         output_suffix=output_suffix,
-                                         output_frame_width=output_frame_width,
-                                         verbose=True)
-
-        # Main
-        progress_bar = tqdm(total=total_frames)
-        frame_num = 0
-        history_list, history_frame_num_list = [], []
-        while cap.isOpened():
-
-            # Load frame
-            ret, frame = cap.read()
-            if not ret:
-                break
-
-            # Detect every specified frames
-            if frame_num >= infer_frame_interval and \
-                    frame_num % infer_frame_interval == 0:
-
-                # Detect face
-                FD_start = time.time()
-                faces = detect_face(frame, detector, confidence_threshold=0.6)
-
-                # Age, Gender
-                age_gender_start = time.time()
-                ages, gender_strs = predict_age_gender(frame, age_gender,
-                                                       faces)
-
-                # Emotion
-                emotion_start = time.time()
-                emotions = predict_emotion(frame, emotion_predictor, faces)
-
-                # Gaze
-                gaze_start = time.time()
-                pitchs, yaws = estimate_gaze(frame, gaze_estimator, faces)
-
-                # Align detected face (returns aligned image and inverse transform matrix)
-                align_start = time.time()
-                aligned_faces = align_face(frame, faces)
-
-                # Parse aligned face
-                parse_start = time.time()
-                if do_face_parsing:
-                    aligned_face_masks, aligned_face_masks_vis = \
-                        parse_face(frame, parser, aligned_faces)
-
-                FD_elapse = time.time() - FD_start
-
-            # Visualization
-            canvas = frame.copy()
-            try:
-                canvas = run_visualization_pipeline(
-                    canvas,
-                    output_frame_width=output_frame_width,
-                    output_frame_height=output_frame_height,
-                    do_face_parsing=do_face_parsing,
-                    frame_num=frame_num,
-                    infer_frame_interval=infer_frame_interval)
-            except NameError as error:
-                if debug:
-                    print(error)
-
-            # Save output
-            output_video_writer.write(canvas)
-
-            # Live display
-            if live_display:
-                canvas_height, canvas_width, _ = canvas.shape
-                if live_display_frame_width > 0:
-                    live_display_frame_height = \
-                        int(live_display_frame_width * (canvas_height / canvas_width))
-                    canvas = cv2.resize(
-                        canvas,
-                        (live_display_frame_width, live_display_frame_height))
-                cv2.imshow(f'{input_video_path}', canvas)
-                key = cv2.waitKey(1)
-                if key == 27:  # Esc
-                    break
-
-            # Update progress
-            progress_bar.update(1)
-            frame_num += 1
-
-        # Clear all cv2 windows
-        if live_display:
-            cv2.destroyAllWindows()
-        cap.release()
-        output_video_writer.release()
+    main()
