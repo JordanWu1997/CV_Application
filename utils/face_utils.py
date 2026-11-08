@@ -22,9 +22,9 @@ import numpy as np
 from uniface import compute_similarity
 from uniface.face_utils import face_alignment
 try:
-    from uniface.draw import draw_detections, vis_parsing_maps
+    from uniface.draw import draw_detections
 except ImportError:  # UniFace 2.0
-    from uniface.visualization import draw_detections, vis_parsing_maps
+    from uniface.visualization import draw_detections
 
 
 def overlay_image_smart(bg_img, overlay_img, x_pos, y_pos):
@@ -179,13 +179,26 @@ def estimate_gaze(image, gaze_estimator, faces):
     return pitchs, yaws
 
 
+def estimate_head_pose(image, estimator, face):
+    """Estimate pose from a clipped detector box, or return None if empty."""
+    x1, y1, x2, y2 = [int(value) for value in face.bbox]
+    height, width = image.shape[:2]
+    crop = image[max(0, y1):min(height, y2),
+                 max(0, x1):min(width, x2)]
+    return estimator.estimate(crop) if crop.size else None
+
+
 def parse_face(image, parser, aligned_faces):
-    aligned_face_masks, aligned_face_masks_vis = [], []
+    """Return UniFace class maps and crops with class 0 background removed."""
+    class_maps, masked_crops = [], []
     for aligned_face in aligned_faces:
-        aligned_face_mask = parser.parse(aligned_face)
-        aligned_face_mask_vis = vis_parsing_maps(aligned_face,
-                                                 aligned_face_mask,
-                                                 save_image=False)
-        aligned_face_masks.append(aligned_face_mask)
-        aligned_face_masks_vis.append(aligned_face_mask_vis)
-    return aligned_face_masks, aligned_face_masks_vis
+        class_map = parser.parse(aligned_face)
+        if class_map.shape[:2] != aligned_face.shape[:2]:
+            class_map = cv2.resize(class_map,
+                                   (aligned_face.shape[1], aligned_face.shape[0]),
+                                   interpolation=cv2.INTER_NEAREST)
+        foreground = (class_map != 0).astype(np.uint8) * 255
+        masked_crop = cv2.bitwise_and(aligned_face, aligned_face, mask=foreground)
+        class_maps.append(class_map)
+        masked_crops.append(masked_crop)
+    return class_maps, masked_crops

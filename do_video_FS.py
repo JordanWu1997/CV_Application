@@ -18,19 +18,20 @@ import cv2
 import numpy as np
 from tqdm import tqdm
 from uniface import MobileGaze, compute_similarity
-from uniface.constants import ArcFaceWeights, GazeWeights, RetinaFaceWeights
+from uniface.constants import (ArcFaceWeights, GazeWeights, HeadPoseWeights,
+                               RetinaFaceWeights)
 from uniface.detection import RetinaFace
 from uniface.face_utils import face_alignment
+from uniface.headpose import HeadPose
 from uniface.recognition import ArcFace
 
-from utils.face_utils import detect_face, estimate_gaze
-from utils.face_pipeline import (FaceFrame, FaceRecord, FaceTracker, crop_face,
-                                 TrackIdentityVoter, output_layout,
+from utils.face_pipeline import (FaceFrame, FaceRecord, FaceTracker,
+                                 TrackIdentityVoter, crop_face, output_layout,
                                  render_face_frame)
+from utils.face_utils import detect_face, estimate_gaze, estimate_head_pose
 from utils.inference_device import (model_provider_kwargs, resolve_providers,
                                     uniface_providers, verify_model_providers)
 from utils.video_writer import EncodedVideoWriter, add_encoding_arguments
-
 
 IMAGE_EXTENSIONS = {'.jpg', '.jpeg', '.png', '.bmp', '.webp'}
 
@@ -94,16 +95,20 @@ class FaceSearchPipeline:
 
     def __init__(self, detector, recognizer, target_groups, threshold=0.3,
                  confidence_threshold=0.6, infer_interval=5, tracking=False,
-                 gaze_estimator=None, vote_window=5, min_votes=3):
+                 gaze_estimator=None, vote_window=5, min_votes=3,
+                 head_pose_estimator=None):
         self.detector = detector
         self.recognizer = recognizer
         self.target_groups = target_groups
         self.threshold = threshold
         self.confidence_threshold = confidence_threshold
-        self.infer_interval = max(1, infer_interval)
+        if infer_interval < 1:
+            raise ValueError('infer_interval must be at least 1.')
+        self.infer_interval = infer_interval
         self.tracker = FaceTracker() if tracking else None
         self.voter = TrackIdentityVoter(vote_window, min_votes) if tracking else None
         self.gaze_estimator = gaze_estimator
+        self.head_pose_estimator = head_pose_estimator
         self.last = FaceFrame(-1)
 
     def process_frame(self, frame, frame_index):
@@ -122,18 +127,24 @@ class FaceSearchPipeline:
             for index, (face, match, similarity) in enumerate(zip(faces, matches, similarities)):
                 group_idx, target_idx = match
                 group = self.target_groups[group_idx] if group_idx is not None else None
+                pose = (estimate_head_pose(frame, self.head_pose_estimator, face)
+                        if self.head_pose_estimator is not None else None)
+                attributes = {
+                    'matched': group is not None,
+                    'group': group['name'] if group else 'NO MATCH',
+                    'reference_index': target_idx if group else None,
+                    'reference_label': group['labels'][target_idx] if group else '',
+                    'similarity': similarity,
+                    'pitch': gaze[0][index], 'yaw': gaze[1][index],
+                }
+                if pose is not None:
+                    attributes.update(head_pitch=pose.pitch, head_yaw=pose.yaw,
+                                      head_roll=pose.roll)
                 records.append(FaceRecord(
                     bbox=tuple(face.bbox), landmarks=np.asarray(face.landmarks),
                     confidence=float(face.confidence), crop=crop_face(frame, face.bbox),
                     reference_crop=group['faces'][target_idx] if group else None,
-                    attributes={
-                        'matched': group is not None,
-                        'group': group['name'] if group else 'NO MATCH',
-                        'reference_index': target_idx if group else None,
-                        'reference_label': group['labels'][target_idx] if group else '',
-                        'similarity': similarity,
-                        'pitch': gaze[0][index], 'yaw': gaze[1][index],
-                    }, extras={'group_index': group_idx}))
+                    attributes=attributes, extras={'group_index': group_idx}))
             if self.tracker:
                 records = self.tracker.update(frame, records)
                 records = self.voter.update(records, self.target_groups)
@@ -172,8 +183,15 @@ def _parse_args():
                         help='Number of detections per track used for match voting')
     parser.add_argument('--track-min-votes', type=int, default=3,
                         help='Matching detections required before showing an identity')
-    parser.add_argument('--no-gaze', action='store_true',
-                        help='Skip gaze estimation and its box arrow')
+    parser.add_argument('--gaze', action='store_true',
+                        help='Estimate gaze and draw its arrow (default: off)')
+    parser.add_argument('--no-gaze', action='store_true', help=argparse.SUPPRESS)
+    parser.add_argument('--show-landmarks', action='store_true',
+                        help='Draw five detector landmarks (default: off)')
+    parser.add_argument('--head-pose', action='store_true',
+                        help='Estimate head pose and draw its 3D box')
+    parser.add_argument('--result-layout', choices=('panel', 'box'), default='panel',
+                        help='Attached panel or frame-only cards beside faces')
     parser.add_argument('--device', choices=('auto', 'cpu', 'cuda', 'openvino'),
                         default='auto',
                         help='ONNX device; auto prefers CoreML, CUDA, OpenVINO, then CPU')
@@ -207,7 +225,9 @@ def main():
     args = _parse_args()
     if args.track_vote_window < 1 or not 1 <= args.track_min_votes <= args.track_vote_window:
         raise ValueError('Require 1 <= --track-min-votes <= --track-vote-window.')
-    interval = max(1, args.infer_frame_interval)
+    if args.infer_frame_interval < 1:
+        raise SystemExit('--infer_frame_interval must be at least 1.')
+    interval = args.infer_frame_interval
     confidence_threshold = min(max(args.confidence_threshold, 0.0), 1.0)
     providers = resolve_providers(args.device, args.openvino_device,
                                   args.openvino_precision)
@@ -222,10 +242,15 @@ def main():
                              **model_provider_kwargs(ArcFace, providers))
         gaze = (MobileGaze(model_name=GazeWeights.RESNET18,
                            **model_provider_kwargs(MobileGaze, providers))
-                if not args.no_gaze else None)
+                if args.gaze and not args.no_gaze else None)
+        head_pose = (HeadPose(model_name=HeadPoseWeights.MOBILENET_V3_SMALL,
+                              **model_provider_kwargs(HeadPose, providers))
+                     if args.head_pose else None)
     models = {'detector': detector, 'recognizer': recognizer}
     if gaze is not None:
         models['gaze'] = gaze
+    if head_pose is not None:
+        models['head_pose'] = head_pose
     verify_model_providers(models, providers)
     openvino_setting = (f'; OpenVINO target: {args.openvino_device}; '
                         f'precision hint: {args.openvino_precision}'
@@ -254,11 +279,14 @@ def main():
         fps = fps if math.isfinite(fps) and fps > 0 else 25.0
         width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
         height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-        layout = output_layout((height, width, 3), target_groups)
+        layout = output_layout((height, width, 3), target_groups,
+                               min_side_width=480,
+                               result_layout=args.result_layout)
         pipeline = FaceSearchPipeline(detector, recognizer, target_groups,
                                       args.similarity_threshold, confidence_threshold,
                                       interval, args.track_faces, gaze,
-                                      args.track_vote_window, args.track_min_votes)
+                                      args.track_vote_window, args.track_min_votes,
+                                      head_pose)
         output_path = os.path.join(args.output_dir,
                                    os.path.splitext(os.path.basename(input_path))[0] + '_output_FS.mp4')
         try:
@@ -279,7 +307,11 @@ def main():
                     break
                 result = pipeline.process_frame(frame, frame_num)
                 canvas = render_face_frame(frame, result, 'FS', layout,
-                                           target_groups, interval)
+                                           target_groups, interval,
+                                           result_layout=args.result_layout,
+                                           show_gaze=gaze is not None,
+                                           show_landmarks=args.show_landmarks,
+                                           head_pose_enabled=args.head_pose)
                 writer.write(canvas)
                 if not args.no_display:
                     preview = canvas
@@ -287,7 +319,10 @@ def main():
                         height = int(args.display_width * canvas.shape[0] / canvas.shape[1])
                         preview = cv2.resize(canvas, (args.display_width, height))
                     cv2.imshow(os.path.basename(input_path), preview)
-                    if cv2.waitKey(1) & 0xFF == 27:
+                    key = cv2.waitKey(1) & 0xFF
+                    if key == ord('q'):
+                        return
+                    if key == 27:
                         break
                 frame_num += 1
                 progress.update(1)
