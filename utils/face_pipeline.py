@@ -5,7 +5,8 @@ person detection, ReID, and pose components can use the same records directly.
 """
 
 from dataclasses import dataclass, field, replace
-from math import ceil, sqrt
+from collections import Counter, deque
+from math import ceil, isfinite, sin, sqrt
 from typing import Any
 
 import cv2
@@ -109,6 +110,79 @@ class FaceTracker:
         return self.records
 
 
+class TrackAttributeVoter:
+    """Smooth FD estimates over recent detections of the same track."""
+
+    def __init__(self, window=5):
+        self.window = window
+        self.history = {}
+
+    def update(self, records):
+        active = {item.track_id for item in records}
+        self.history = {key: value for key, value in self.history.items()
+                        if key in active}
+        for item in records:
+            samples = self.history.setdefault(item.track_id, deque(maxlen=self.window))
+            samples.append(item.attributes.copy())
+            for key in ('gender', 'emotion'):
+                values = [sample.get(key) for sample in samples
+                          if sample.get(key) not in (None, 'N/A')]
+                if values:
+                    item.attributes[key] = Counter(values).most_common(1)[0][0]
+            for key in ('age', 'pitch', 'yaw'):
+                values = [sample.get(key) for sample in samples]
+                values = [value for value in values
+                          if isinstance(value, (int, float)) and isfinite(value)]
+                if values:
+                    item.attributes[key] = float(np.median(values))
+            if 'face_states' in item.attributes:
+                states = [sample['face_states'] for sample in samples
+                          if sample.get('face_states')]
+                item.attributes['face_states'] = {
+                    key: float(np.mean([state[key] for state in states]))
+                    for key in states[-1]
+                }
+        return records
+
+
+class TrackIdentityVoter:
+    """Require repeated FS matches before assigning a group to a track."""
+
+    def __init__(self, window=5, min_votes=3):
+        self.window = window
+        self.min_votes = min_votes
+        self.history = {}
+
+    def update(self, records, target_groups):
+        active = {item.track_id for item in records}
+        self.history = {key: value for key, value in self.history.items()
+                        if key in active}
+        for item in records:
+            samples = self.history.setdefault(item.track_id, deque(maxlen=self.window))
+            samples.append((item.extras['group_index'],
+                            item.attributes['reference_index'],
+                            item.attributes['similarity']))
+            votes = Counter(group for group, _, _ in samples if group is not None)
+            winner, count = votes.most_common(1)[0] if votes else (None, 0)
+            item.attributes['vote_count'] = count
+            item.attributes['vote_total'] = len(samples)
+            if winner is None or count < self.min_votes or count <= len(samples) // 2:
+                item.attributes.update(matched=False, group='NO MATCH',
+                                       reference_index=None, reference_label='')
+                item.reference_crop = None
+                continue
+            winning = [(reference, similarity) for group, reference, similarity in samples
+                       if group == winner]
+            reference = max(winning, key=lambda value: value[1])[0]
+            group = target_groups[winner]
+            item.attributes.update(matched=True, group=group['name'],
+                                   reference_index=reference,
+                                   reference_label=group['labels'][reference],
+                                   similarity=float(np.mean([value[1] for value in winning])))
+            item.reference_crop = group['faces'][reference]
+        return records
+
+
 def output_layout(frame_shape, target_groups=None, history_height=0):
     h, w = frame_shape[:2]
     side_width = max(360, w // 2)
@@ -162,6 +236,24 @@ def render_face_frame(frame, result, mode, layout, target_groups=None,
         color = ((75, 220, 110) if face.attributes.get('matched') else (70, 100, 230)) if mode == 'FS' else (75, 220, 220)
         x1, y1, x2, y2 = [int(v) for v in face.bbox]
         cv2.rectangle(canvas, (x1, y1), (x2, y2), color, 2, cv2.LINE_AA)
+        points = np.asarray(face.landmarks, dtype=np.float32).reshape(-1, 2)
+        for point in points[:5]:
+            if np.all(np.isfinite(point)):
+                cv2.circle(canvas, tuple(np.rint(point).astype(int)), 3,
+                           (255, 255, 255), -1, cv2.LINE_AA)
+        pitch, yaw = face.attributes.get('pitch'), face.attributes.get('yaw')
+        if (len(points) >= 2 and pitch is not None and yaw is not None
+                and isfinite(pitch) and isfinite(yaw)):
+            origin = np.mean(points[:2], axis=0)
+            length = max(16, min(60, 0.7 * max(x2 - x1, y2 - y1)))
+            endpoint = origin + (length * sin(yaw), -length * sin(pitch))
+            start = tuple(np.rint(origin).astype(int))
+            end = tuple(np.rint(endpoint).astype(int))
+            if np.linalg.norm(endpoint - origin) >= 4:
+                cv2.arrowedLine(canvas, start, end, (0, 255, 255), 2,
+                                cv2.LINE_AA, tipLength=0.25)
+            else:
+                cv2.circle(canvas, start, 5, (0, 255, 255), 2, cv2.LINE_AA)
         face_id = face.track_id if face.track_id is not None else index
         tag = f'#{face_id}'
         cv2.rectangle(canvas, (max(0, x1), max(0, y1 - 28)),
@@ -201,20 +293,39 @@ def render_face_frame(frame, result, mode, layout, target_groups=None,
                 label = (f"{face.attributes.get('group', 'NO MATCH')}  "
                          f"sim {face.attributes.get('similarity', -1):.2f}")
                 detail = face.attributes.get('reference_label', '')
+                detail_lines = [detail]
+                if 'vote_total' in face.attributes:
+                    detail_lines.append(
+                        f"votes {face.attributes['vote_count']}/{face.attributes['vote_total']}")
             else:
                 label = (f"{face.attributes.get('gender', '?')}  "
                          f"age {face.attributes.get('age', '?')}  "
                          f"{face.attributes.get('emotion', '?')}")
                 detail = (f"gaze {face.attributes.get('pitch', '?')}, "
                           f"{face.attributes.get('yaw', '?')}")
+                detail_lines = [detail]
+                quality = face.attributes.get('quality_score')
+                if quality is not None:
+                    detail_lines.append(f'quality {quality:.3f}')
+                states = face.attributes.get('face_states')
+                if states:
+                    detail_lines.extend((
+                        f"eyes L{states['left_eye_open']:.2f} R{states['right_eye_open']:.2f}",
+                        f"glasses {states['eyeglasses']:.2f} sun {states['sunglasses']:.2f}",
+                        f"mask {states['mask']:.2f}",
+                    ))
             if cell_h >= 95:
                 label_y = min(y + cell_h - 47,
                               y + max(95, 37 + tile_size + 42))
                 _text(canvas, label, x + 10, label_y, 0.62,
                       max_width=cell_w - 20)
-                _text(canvas, detail, x + 10,
-                      min(y + cell_h - 20, label_y + 27), 0.55,
-                      max_width=cell_w - 20)
+                for line_index, line in enumerate(detail_lines, start=1):
+                    line_y = label_y + (27 if mode == 'FS' else 23) * line_index
+                    if line_y > y + cell_h - 14:
+                        break
+                    _text(canvas, line, x + 10, line_y,
+                          0.55 if mode == 'FS' else 0.52,
+                          max_width=cell_w - 20)
             elif cell_h >= 62:
                 _text(canvas, label, x + 10, y + cell_h - 14, 0.52,
                       max_width=cell_w - 20)

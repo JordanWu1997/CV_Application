@@ -17,17 +17,18 @@ import time
 import cv2
 import numpy as np
 from tqdm import tqdm
-from uniface import compute_similarity
-from uniface.constants import ArcFaceWeights, RetinaFaceWeights
+from uniface import MobileGaze, compute_similarity
+from uniface.constants import ArcFaceWeights, GazeWeights, RetinaFaceWeights
 from uniface.detection import RetinaFace
 from uniface.face_utils import face_alignment
 from uniface.recognition import ArcFace
 
-from utils.face_utils import detect_face
+from utils.face_utils import detect_face, estimate_gaze
 from utils.face_pipeline import (FaceFrame, FaceRecord, FaceTracker, crop_face,
-                                 output_layout, render_face_frame)
-from utils.inference_device import (resolve_providers, uniface_providers,
-                                    verify_model_providers)
+                                 TrackIdentityVoter, output_layout,
+                                 render_face_frame)
+from utils.inference_device import (model_provider_kwargs, resolve_providers,
+                                    uniface_providers, verify_model_providers)
 from utils.video_writer import EncodedVideoWriter, add_encoding_arguments
 
 
@@ -92,7 +93,8 @@ class FaceSearchPipeline:
     """Reusable FS processor. Call process_frame before drawing or downstream fusion."""
 
     def __init__(self, detector, recognizer, target_groups, threshold=0.3,
-                 confidence_threshold=0.6, infer_interval=5, tracking=False):
+                 confidence_threshold=0.6, infer_interval=5, tracking=False,
+                 gaze_estimator=None, vote_window=5, min_votes=3):
         self.detector = detector
         self.recognizer = recognizer
         self.target_groups = target_groups
@@ -100,6 +102,8 @@ class FaceSearchPipeline:
         self.confidence_threshold = confidence_threshold
         self.infer_interval = max(1, infer_interval)
         self.tracker = FaceTracker() if tracking else None
+        self.voter = TrackIdentityVoter(vote_window, min_votes) if tracking else None
+        self.gaze_estimator = gaze_estimator
         self.last = FaceFrame(-1)
 
     def process_frame(self, frame, frame_index):
@@ -112,8 +116,10 @@ class FaceSearchPipeline:
                 frame, np.asarray(face.landmarks)) for face in faces]
             matches, similarities = _match_faces(embeddings, self.target_groups,
                                                   self.threshold)
+            gaze = (estimate_gaze(frame, self.gaze_estimator, faces)
+                    if self.gaze_estimator else ([None] * len(faces), [None] * len(faces)))
             records = []
-            for face, match, similarity in zip(faces, matches, similarities):
+            for index, (face, match, similarity) in enumerate(zip(faces, matches, similarities)):
                 group_idx, target_idx = match
                 group = self.target_groups[group_idx] if group_idx is not None else None
                 records.append(FaceRecord(
@@ -126,9 +132,11 @@ class FaceSearchPipeline:
                         'reference_index': target_idx if group else None,
                         'reference_label': group['labels'][target_idx] if group else '',
                         'similarity': similarity,
-                    }))
+                        'pitch': gaze[0][index], 'yaw': gaze[1][index],
+                    }, extras={'group_index': group_idx}))
             if self.tracker:
                 records = self.tracker.update(frame, records)
+                records = self.voter.update(records, self.target_groups)
             result = FaceFrame(frame_index, records, True,
                                time.perf_counter() - start, self.tracker is not None)
         else:
@@ -159,9 +167,20 @@ def _parse_args():
     parser.add_argument('--display-width', type=int, default=0,
                         help='Live preview width; 0 keeps full resolution')
     parser.add_argument('--track-faces', action='store_true',
-                        help='Assign face IDs and propagate boxes between detections')
+                        help='Track faces and vote on FS matches across detections')
+    parser.add_argument('--track-vote-window', type=int, default=5,
+                        help='Number of detections per track used for match voting')
+    parser.add_argument('--track-min-votes', type=int, default=3,
+                        help='Matching detections required before showing an identity')
+    parser.add_argument('--no-gaze', action='store_true',
+                        help='Skip gaze estimation and its box arrow')
     parser.add_argument('--device', choices=('auto', 'cpu', 'cuda', 'openvino'),
-                        default='auto', help='Face model inference device')
+                        default='auto',
+                        help='ONNX device; auto prefers CoreML, CUDA, OpenVINO, then CPU')
+    parser.add_argument('--openvino-device', choices=('CPU', 'GPU'), default='CPU',
+                        help='OpenVINO target device (default: CPU)')
+    parser.add_argument('--openvino-precision', choices=('FP32', 'FP16'), default='FP32',
+                        help='OpenVINO GPU inference precision hint (default: FP32)')
     add_encoding_arguments(parser)
     args = parser.parse_args()
 
@@ -186,17 +205,32 @@ def _parse_args():
 
 def main():
     args = _parse_args()
+    if args.track_vote_window < 1 or not 1 <= args.track_min_votes <= args.track_vote_window:
+        raise ValueError('Require 1 <= --track-min-votes <= --track-vote-window.')
     interval = max(1, args.infer_frame_interval)
     confidence_threshold = min(max(args.confidence_threshold, 0.0), 1.0)
-    providers = resolve_providers(args.device)
+    providers = resolve_providers(args.device, args.openvino_device,
+                                  args.openvino_precision)
     with uniface_providers(providers):
         detector = RetinaFace(model_name=RetinaFaceWeights.RESNET34,
                               confidence_threshold=0.5, nms_threshold=0.4,
                               input_size=(args.detector_input_size,
-                                          args.detector_input_size))
-        recognizer = ArcFace(model_name=ArcFaceWeights.RESNET)
-    verify_model_providers({'detector': detector, 'recognizer': recognizer}, providers)
-    print(f'[INFO] Inference device: {args.device}; ONNX providers: '
+                                          args.detector_input_size),
+                              **model_provider_kwargs(RetinaFace, providers))
+        verify_model_providers({'detector': detector}, providers)
+        recognizer = ArcFace(model_name=ArcFaceWeights.RESNET,
+                             **model_provider_kwargs(ArcFace, providers))
+        gaze = (MobileGaze(model_name=GazeWeights.RESNET18,
+                           **model_provider_kwargs(MobileGaze, providers))
+                if not args.no_gaze else None)
+    models = {'detector': detector, 'recognizer': recognizer}
+    if gaze is not None:
+        models['gaze'] = gaze
+    verify_model_providers(models, providers)
+    openvino_setting = (f'; OpenVINO target: {args.openvino_device}; '
+                        f'precision hint: {args.openvino_precision}'
+                        if args.device == 'openvino' else '')
+    print(f'[INFO] Inference device: {args.device}{openvino_setting}; ONNX providers: '
           f'{detector.session.get_providers()}')
     target_groups = []
     for name, paths in args.target_groups:
@@ -223,7 +257,8 @@ def main():
         layout = output_layout((height, width, 3), target_groups)
         pipeline = FaceSearchPipeline(detector, recognizer, target_groups,
                                       args.similarity_threshold, confidence_threshold,
-                                      interval, args.track_faces)
+                                      interval, args.track_faces, gaze,
+                                      args.track_vote_window, args.track_min_votes)
         output_path = os.path.join(args.output_dir,
                                    os.path.splitext(os.path.basename(input_path))[0] + '_output_FS.mp4')
         try:

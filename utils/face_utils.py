@@ -15,12 +15,16 @@ r"""
 """
 
 import os
+from inspect import signature
 
 import cv2
 import numpy as np
 from uniface import compute_similarity
 from uniface.face_utils import face_alignment
-from uniface.visualization import draw_detections, vis_parsing_maps
+try:
+    from uniface.draw import draw_detections, vis_parsing_maps
+except ImportError:  # UniFace 2.0
+    from uniface.visualization import draw_detections, vis_parsing_maps
 
 
 def overlay_image_smart(bg_img, overlay_img, x_pos, y_pos):
@@ -140,11 +144,9 @@ def get_matched_faces(faces, match_id_dict):
 
 def predict_age_gender(image, age_gender, faces):
     gender_strs, ages = [], []
+    takes_face = 'face' in signature(age_gender.predict).parameters
     for face in faces:
-        bbox = [int(ele) for ele in face.bbox]
-        x1, y1, x2, y2 = bbox
-        # Detect age/gender
-        result = age_gender.predict(image, face.bbox)
+        result = age_gender.predict(image, face if takes_face else face.bbox)
         gender_str = 'F' if result.gender == 0 else 'M'
         gender_strs.append(gender_str)
         ages.append(result.age)
@@ -153,12 +155,10 @@ def predict_age_gender(image, age_gender, faces):
 
 def predict_emotion(image, emotion_predictor, faces):
     emotions = []
+    takes_face = 'face' in signature(emotion_predictor.predict).parameters
     for face in faces:
-        bbox = [int(ele) for ele in face.bbox]
-        x1, y1, x2, y2 = bbox
-        # Predict emotion w/ landmarks
-        landmarks = np.array(face.landmarks)
-        result = emotion_predictor.predict(image, landmarks)
+        target = face if takes_face else np.asarray(face.landmarks)
+        result = emotion_predictor.predict(image, target)
         emotions.append(result.emotion)
     return emotions
 
