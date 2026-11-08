@@ -10,6 +10,7 @@ Each target directory can contain images directly or in nested directories.
 """
 
 import argparse
+import math
 import os
 import time
 
@@ -25,6 +26,9 @@ from uniface.recognition import ArcFace
 from utils.face_utils import detect_face
 from utils.face_pipeline import (FaceFrame, FaceRecord, FaceTracker, crop_face,
                                  output_layout, render_face_frame)
+from utils.inference_device import (resolve_providers, uniface_providers,
+                                    verify_model_providers)
+from utils.video_writer import EncodedVideoWriter, add_encoding_arguments
 
 
 IMAGE_EXTENSIONS = {'.jpg', '.jpeg', '.png', '.bmp', '.webp'}
@@ -156,6 +160,9 @@ def _parse_args():
                         help='Live preview width; 0 keeps full resolution')
     parser.add_argument('--track-faces', action='store_true',
                         help='Assign face IDs and propagate boxes between detections')
+    parser.add_argument('--device', choices=('auto', 'cpu', 'cuda', 'openvino'),
+                        default='auto', help='Face model inference device')
+    add_encoding_arguments(parser)
     args = parser.parse_args()
 
     groups = []
@@ -181,11 +188,16 @@ def main():
     args = _parse_args()
     interval = max(1, args.infer_frame_interval)
     confidence_threshold = min(max(args.confidence_threshold, 0.0), 1.0)
-    detector = RetinaFace(model_name=RetinaFaceWeights.RESNET34, conf_thresh=0.5,
-                          nms_thresh=0.4,
-                          input_size=(args.detector_input_size,
-                                      args.detector_input_size))
-    recognizer = ArcFace(model_name=ArcFaceWeights.RESNET)
+    providers = resolve_providers(args.device)
+    with uniface_providers(providers):
+        detector = RetinaFace(model_name=RetinaFaceWeights.RESNET34,
+                              confidence_threshold=0.5, nms_threshold=0.4,
+                              input_size=(args.detector_input_size,
+                                          args.detector_input_size))
+        recognizer = ArcFace(model_name=ArcFaceWeights.RESNET)
+    verify_model_providers({'detector': detector, 'recognizer': recognizer}, providers)
+    print(f'[INFO] Inference device: {args.device}; ONNX providers: '
+          f'{detector.session.get_providers()}')
     target_groups = []
     for name, paths in args.target_groups:
         combined = {'name': name, 'faces': [], 'embeddings': [], 'labels': []}
@@ -205,7 +217,7 @@ def main():
         total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
         os.makedirs(args.output_dir, exist_ok=True)
         fps = cap.get(cv2.CAP_PROP_FPS)
-        fps = fps if fps > 0 else 25.0
+        fps = fps if math.isfinite(fps) and fps > 0 else 25.0
         width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
         height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
         layout = output_layout((height, width, 3), target_groups)
@@ -214,12 +226,15 @@ def main():
                                       interval, args.track_faces)
         output_path = os.path.join(args.output_dir,
                                    os.path.splitext(os.path.basename(input_path))[0] + '_output_FS.mp4')
-        writer = cv2.VideoWriter(output_path, cv2.VideoWriter_fourcc(*'mp4v'),
-                                 fps, layout[:2])
-        if not writer.isOpened():
+        try:
+            writer = EncodedVideoWriter(output_path, layout[:2], fps,
+                                        args.video_codec, args.video_crf,
+                                        args.video_preset)
+        except Exception:
             cap.release()
-            raise RuntimeError(f'Could not create output video: {output_path}')
-        print(f'[INFO] OUTPUT: {output_path} ({layout[0]}x{layout[1]}@{fps:.2f})')
+            raise
+        print(f'[INFO] OUTPUT: {output_path} ({layout[0]}x{layout[1]}@{fps:.2f}, '
+              f'{args.video_codec} CRF {args.video_crf}, {args.video_preset})')
         frame_num = 0
         progress = tqdm(total=total_frames)
         try:

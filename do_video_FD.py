@@ -2,11 +2,13 @@
 """Video face detection and attributes with optional tracking and separate rendering."""
 
 import argparse
+import math
 import os
 import time
 
 import cv2
 import numpy as np
+import torch
 from tqdm import tqdm
 from uniface import MobileGaze
 from uniface.attribute.age_gender import AgeGender
@@ -20,6 +22,21 @@ from utils.face_pipeline import (FaceFrame, FaceRecord, FaceTracker,
                                  output_layout, render_face_frame)
 from utils.face_utils import (align_face, detect_face, estimate_gaze,
                               parse_face, predict_age_gender, predict_emotion)
+from utils.inference_device import (resolve_providers, uniface_providers,
+                                    verify_model_providers)
+from utils.video_writer import EncodedVideoWriter, add_encoding_arguments
+
+
+class DeviceEmotion(Emotion):
+    """Place UniFace's TorchScript emotion model on the requested torch device."""
+
+    def __init__(self, *args, device, **kwargs):
+        self.requested_device = device
+        super().__init__(*args, **kwargs)
+
+    def _initialize_model(self):
+        self.device = torch.device(self.requested_device)
+        super()._initialize_model()
 
 
 class FaceDetectionPipeline:
@@ -86,6 +103,9 @@ def _parse_args():
     parser.add_argument('--no-display', action='store_true', help='Disable live preview')
     parser.add_argument('--display-width', type=int, default=0,
                         help='Live preview width; 0 keeps full resolution')
+    parser.add_argument('--device', choices=('auto', 'cpu', 'cuda', 'openvino'),
+                        default='auto', help='Face model inference device')
+    add_encoding_arguments(parser)
     return parser.parse_args()
 
 
@@ -93,14 +113,30 @@ def main():
     args = _parse_args()
     interval = max(1, args.infer_frame_interval)
     threshold = min(max(args.confidence_threshold, 0.0), 1.0)
-    detector = RetinaFace(model_name=RetinaFaceWeights.RESNET34,
-                          conf_thresh=0.5, nms_thresh=0.4,
-                          input_size=(args.detector_input_size, args.detector_input_size))
-    age_gender = AgeGender()
-    emotion = Emotion(model_weights=DDAMFNWeights.AFFECNET8, input_size=(112, 112))
-    gaze = MobileGaze(model_name=GazeWeights.RESNET18)
-    face_parser = (BiSeNet(model_name=ParsingWeights.RESNET34, input_size=(112, 112))
-                   if args.parse_face else None)
+    providers = resolve_providers(args.device)
+    if args.device == 'cuda' and not torch.cuda.is_available():
+        raise RuntimeError('CUDA was selected, but PyTorch CUDA is unavailable for emotion inference.')
+    with uniface_providers(providers):
+        detector = RetinaFace(model_name=RetinaFaceWeights.RESNET34,
+                              confidence_threshold=0.5, nms_threshold=0.4,
+                              input_size=(args.detector_input_size, args.detector_input_size))
+        age_gender = AgeGender()
+        gaze = MobileGaze(model_name=GazeWeights.RESNET18)
+        face_parser = (BiSeNet(model_name=ParsingWeights.RESNET34, input_size=(112, 112))
+                       if args.parse_face else None)
+    models = {'detector': detector, 'age_gender': age_gender, 'gaze': gaze}
+    if face_parser is not None:
+        models['parsing'] = face_parser
+    verify_model_providers(models, providers)
+    torch_device = 'cpu' if args.device in ('cpu', 'openvino') else 'cuda'
+    if args.device == 'auto':
+        emotion = Emotion(model_weights=DDAMFNWeights.AFFECNET8,
+                          input_size=(112, 112))
+    else:
+        emotion = DeviceEmotion(model_weights=DDAMFNWeights.AFFECNET8,
+                                input_size=(112, 112), device=torch_device)
+    print(f'[INFO] Inference device: {args.device}; ONNX providers: '
+          f'{detector.session.get_providers()}; emotion: {emotion.device}')
 
     for input_path in args.input:
         cap = cv2.VideoCapture(input_path)
@@ -110,17 +146,21 @@ def main():
         total = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
         width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
         height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-        fps = cap.get(cv2.CAP_PROP_FPS) or 25.0
+        fps = cap.get(cv2.CAP_PROP_FPS)
+        fps = fps if math.isfinite(fps) and fps > 0 else 25.0
         layout = output_layout((height, width, 3))
         os.makedirs(args.output_dir, exist_ok=True)
         output_path = os.path.join(args.output_dir,
                                    os.path.splitext(os.path.basename(input_path))[0] + '_output_FD.mp4')
-        writer = cv2.VideoWriter(output_path, cv2.VideoWriter_fourcc(*'mp4v'),
-                                 fps, layout[:2])
-        if not writer.isOpened():
+        try:
+            writer = EncodedVideoWriter(output_path, layout[:2], fps,
+                                        args.video_codec, args.video_crf,
+                                        args.video_preset)
+        except Exception:
             cap.release()
-            raise RuntimeError(f'Could not create output video: {output_path}')
-        print(f'[INFO] OUTPUT: {output_path} ({layout[0]}x{layout[1]}@{fps:.2f})')
+            raise
+        print(f'[INFO] OUTPUT: {output_path} ({layout[0]}x{layout[1]}@{fps:.2f}, '
+              f'{args.video_codec} CRF {args.video_crf}, {args.video_preset})')
         pipeline = FaceDetectionPipeline(detector, age_gender, emotion, gaze,
                                          face_parser, threshold, interval,
                                          args.track_faces)
